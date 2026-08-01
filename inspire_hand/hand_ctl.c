@@ -1,0 +1,144 @@
+/* hand_ctl - Inspire RH56F1 EtherCAT control core (SOEM)
+ *
+ * Usage:
+ *   hand_ctl state
+ *   hand_ctl pose P R M I TB TR [force] [speed]
+ *       targets 0..2000 (0=closed, 2000=open), -1 = leave axis unchanged
+ *
+ * Behavior encodes the reverse-engineered F1 semantics:
+ *   - boot lands all axes in STATUS=7 (standby); wiggle around current
+ *     position wakes them before a pose is accepted
+ *   - targets execute when the master disconnects (SM watchdog), so this
+ *     tool writes the pose, holds briefly, then exits
+ * Safety:
+ *   - range clamp, force/speed caps
+ *   - index+thumb close collision guard (STA=5 crash observed on-site)
+ * Output: single JSON object on stdout.
+ */
+#include "soem/soem.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define IFACE "enp59s0f1"
+#define WAKE_MS_MAX 12000
+#define HOLD_MS 1200
+
+static ecx_contextt ctx;
+static uint8 IOmap[4096];
+
+static void pd(void)
+{
+   ecx_send_processdata(&ctx);
+   ecx_receive_processdata(&ctx, EC_TIMEOUTRET);
+}
+
+static void jarr(const char *k, int16_t *v, int n, int last)
+{
+   int i;
+   printf("\"%s\":[", k);
+   for (i = 0; i < n; i++) printf("%d%s", v[i], i < n - 1 ? "," : "");
+   printf("]%s", last ? "" : ",");
+}
+
+static void fail(const char *msg)
+{
+   printf("{\"ok\":false,\"error\":\"%s\"}\n", msg);
+   exit(1);
+}
+
+int main(int argc, char **argv)
+{
+   int16_t *out, *in;
+   int16_t tgt[6] = {-1, -1, -1, -1, -1, -1};
+   int force = 500, speed = 800;
+   int do_pose = 0, i, chk, t;
+
+   if (argc < 2) fail("usage: hand_ctl state | pose P R M I TB TR [force] [speed]");
+   if (!strcmp(argv[1], "pose"))
+   {
+      if (argc < 8) fail("pose needs 6 targets");
+      do_pose = 1;
+      for (i = 0; i < 6; i++)
+      {
+         long v = strtol(argv[2 + i], NULL, 10);
+         if (v != -1 && (v < 0 || v > 2000)) fail("target out of range (0..2000 or -1)");
+         tgt[i] = (int16_t)v;
+      }
+      if (argc > 8) force = atoi(argv[8]);
+      if (argc > 9) speed = atoi(argv[9]);
+      if (force < 0 || force > 1000) fail("force out of range (0..1000)");
+      if (speed < 50 || speed > 1000) fail("speed out of range (50..1000)");
+      /* collision guard: closing index and thumb-bend together jams the
+         mechanism (observed: STA=5 current-protection stop). */
+      if (tgt[3] != -1 && tgt[3] < 600 && tgt[4] != -1 && tgt[4] < 600)
+         fail("collision guard: index<600 and thumb_bend<600 together is forbidden; stagger them (fingers first, thumb second)");
+   }
+   else if (strcmp(argv[1], "state"))
+      fail("unknown command");
+
+   if (!ecx_init(&ctx, IFACE)) fail("ecx_init (need CAP_NET_RAW or root)");
+   if (ecx_config_init(&ctx) <= 0) fail("no EtherCAT slave (check link/power)");
+   ctx.slavelist[1].mbx_proto = 0; /* dead CoE mailbox on this SSC build */
+   ecx_config_map_group(&ctx, IOmap, 0);
+   ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
+   ctx.slavelist[0].state = EC_STATE_OPERATIONAL;
+   pd();
+   ecx_writestate(&ctx, 0);
+   chk = 200;
+   do { pd(); ecx_statecheck(&ctx, 0, EC_STATE_OPERATIONAL, 50000); }
+   while (chk-- && (ctx.slavelist[0].state != EC_STATE_OPERATIONAL));
+   ecx_readstate(&ctx);
+   if (ctx.slavelist[1].state != EC_STATE_OPERATIONAL) fail("slave refused OPERATIONAL");
+
+   out = (int16_t *)ctx.slavelist[1].outputs;
+   in  = (int16_t *)ctx.slavelist[1].inputs;
+
+   /* neutral frame: enable + no-change targets (never leave zeros: 0=fist!) */
+   memset(out, 0, ctx.slavelist[1].Obytes);
+   out[0] = 1;
+   for (i = 1; i <= 6; i++)  out[i] = -1;
+   for (i = 7; i <= 12; i++) out[i] = (int16_t)force;
+   for (i = 13; i <= 18; i++) out[i] = (int16_t)speed;
+   for (t = 0; t < 300; t++) { pd(); osal_usleep(1000); }
+
+   if (do_pose)
+   {
+      /* wake axes stuck in STATUS=7 by wiggling around current position */
+      int asleep = 1;
+      for (t = 0; t < WAKE_MS_MAX && asleep; t++)
+      {
+         int16_t base;
+         for (i = 0; i < 6; i++)
+         {
+            base = in[6 + i];
+            if (base < 200) base = 200;
+            if (base > 1800) base = 1800;
+            out[1 + i] = base + (((t / 400) % 2) ? 60 : -60);
+         }
+         pd();
+         if (t % 200 == 0)
+         {
+            asleep = 0;
+            for (i = 0; i < 6; i++) if (in[30 + i] == 7) asleep = 1;
+         }
+         osal_usleep(1000);
+      }
+      /* write the requested pose; execution happens after we disconnect */
+      for (i = 0; i < 6; i++) out[1 + i] = tgt[i];
+      for (t = 0; t < HOLD_MS; t++) { pd(); osal_usleep(1000); }
+   }
+
+   printf("{\"ok\":true,\"mode\":\"%s\",", do_pose ? "pose" : "state");
+   jarr("pos", &in[0], 6, 0);
+   jarr("ang", &in[6], 6, 0);
+   jarr("frc", &in[12], 6, 0);
+   jarr("cur", &in[18], 6, 0);
+   jarr("err", &in[24], 6, 0);
+   jarr("sta", &in[30], 6, 0);
+   jarr("tmp", &in[36], 6, 1);
+   printf("}\n");
+   ecx_close(&ctx);
+   return 0;
+}

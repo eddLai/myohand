@@ -10,12 +10,14 @@
  *     position wakes them before a pose is accepted
  *   - targets execute when the master disconnects (SM watchdog), so this
  *     tool writes the pose, holds briefly, then exits
- * Safety:
- *   - range clamp, force/speed caps
- *   - index+thumb close collision guard (STA=5 crash observed on-site)
+ * Safety (shared driver layer, see hand_safety.c):
+ *   - exclusive bus lock, range clamp, per-axis force/speed profile
+ *   - joint interlock clamps poses that would jam index against thumb
+ *   - stall relief for axes left loaded by a previous execution
  * Output: single JSON object on stdout.
  */
 #include "soem/soem.h"
+#include "hand_safety.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -53,7 +55,8 @@ int main(int argc, char **argv)
    int16_t *out, *in;
    int16_t tgt[6] = {-1, -1, -1, -1, -1, -1};
    int force = 500, speed = 800;
-   int do_pose = 0, i, chk, t;
+   int do_pose = 0, i, chk, t, lock_fd, guarded = 0;
+   char why[256] = {0};
 
    if (argc < 2) fail("usage: hand_ctl state | pose P R M I TB TR [force] [speed]");
    if (!strcmp(argv[1], "pose"))
@@ -70,14 +73,12 @@ int main(int argc, char **argv)
       if (argc > 9) speed = atoi(argv[9]);
       if (force < 0 || force > 1000) fail("force out of range (0..1000)");
       if (speed < 50 || speed > 1000) fail("speed out of range (50..1000)");
-      /* collision guard: closing index and thumb-bend together jams the
-         mechanism (observed: STA=5 current-protection stop). */
-      if (tgt[3] != -1 && tgt[3] < 600 && tgt[4] != -1 && tgt[4] < 600)
-         fail("collision guard: index<600 and thumb_bend<600 together is forbidden; stagger them (fingers first, thumb second)");
    }
    else if (strcmp(argv[1], "state"))
       fail("unknown command");
 
+   lock_fd = hs_lock(20);
+   if (lock_fd < 0) fail("bus busy: another master holds the hand (20s timeout)");
    if (!ecx_init(&ctx, IFACE)) fail("ecx_init (need CAP_NET_RAW or root)");
    if (ecx_config_init(&ctx) <= 0) fail("no EtherCAT slave (check link/power)");
    ctx.slavelist[1].mbx_proto = 0; /* dead CoE mailbox on this SSC build */
@@ -99,8 +100,7 @@ int main(int argc, char **argv)
    memset(out, 0, ctx.slavelist[1].Obytes);
    out[0] = 1;
    for (i = 1; i <= 6; i++)  out[i] = -1;
-   for (i = 7; i <= 12; i++) out[i] = (int16_t)force;
-   for (i = 13; i <= 18; i++) out[i] = (int16_t)speed;
+   hs_profile(out, force, speed);
    for (t = 0; t < 300; t++) { pd(); osal_usleep(1000); }
 
    if (do_pose)
@@ -125,12 +125,16 @@ int main(int argc, char **argv)
          }
          osal_usleep(1000);
       }
+      /* driver-level gate: nothing reaches the PDO unchecked */
+      guarded  = hs_stall_relief(tgt, &in[18], &in[30], &in[6], why, sizeof why);
+      guarded += hs_interlock(tgt, &in[6], why, sizeof why);
       /* write the requested pose; execution happens after we disconnect */
-      for (i = 0; i < 6; i++) out[1 + i] = tgt[i];
+      for (i = 0; i < 6; i++) out[HS_OUT_TARGET + i] = tgt[i];
       for (t = 0; t < HOLD_MS; t++) { pd(); osal_usleep(1000); }
    }
 
-   printf("{\"ok\":true,\"mode\":\"%s\",", do_pose ? "pose" : "state");
+   printf("{\"ok\":true,\"mode\":\"%s\",\"guarded\":%d,\"guard_note\":\"%s\",",
+          do_pose ? "pose" : "state", guarded, why);
    jarr("pos", &in[0], 6, 0);
    jarr("ang", &in[6], 6, 0);
    jarr("frc", &in[12], 6, 0);
@@ -140,5 +144,6 @@ int main(int argc, char **argv)
    jarr("tmp", &in[36], 6, 1);
    printf("}\n");
    ecx_close(&ctx);
+   hs_unlock(lock_fd);
    return 0;
 }

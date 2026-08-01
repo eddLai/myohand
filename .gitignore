@@ -11,3 +11,4 @@ __pycache__/
 *.log
 *.o
 dist/
+test_safety

@@ -2,6 +2,7 @@
    Auto-wakes axes stuck in STATUS=7 by wiggling targets, then parks the pose
    and exits so the SM-watchdog timeout triggers execution. */
 #include "soem/soem.h"
+#include "hand_safety.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -19,10 +20,13 @@ static void pd(void)
 int main(int argc, char **argv)
 {
    int16_t *out, *in, tgt[6];
-   int i, chk, t, need_wake;
+   int i, chk, t, need_wake, lock_fd, guarded;
+   char why[256] = {0};
    if (argc < 7) { printf("usage: hand_set p r m i tb tr (0-2000, -1=hold)\n"); return 1; }
    for (i = 0; i < 6; i++) tgt[i] = (int16_t)atoi(argv[i + 1]);
 
+   lock_fd = hs_lock(20);
+   if (lock_fd < 0) { printf("bus busy: another master holds the hand\n"); return 3; }
    if (!ecx_init(&ctx, "enp59s0f1")) { printf("init fail\n"); return 1; }
    if (ecx_config_init(&ctx) <= 0) { printf("no slaves\n"); return 1; }
    ctx.slavelist[1].mbx_proto = 0;
@@ -41,9 +45,7 @@ int main(int argc, char **argv)
 
    memset(out, 0, ctx.slavelist[1].Obytes);
    out[0] = 1;
-   for (i = 7; i <= 12; i++)  out[i] = 500;   /* force limit: gentle */
-   out[11] = 1900;  /* thumb-bend force limit above its ~1300-1857g phantom */
-   for (i = 13; i <= 18; i++) out[i] = 1000;  /* speed */
+   hs_profile(out, 500, 1000);   /* shared per-axis force/speed profile */
    for (i = 1; i <= 6; i++)   out[i] = -1;
    for (t = 0; t < 200; t++) { pd(); osal_usleep(1000); }
 
@@ -67,12 +69,17 @@ int main(int argc, char **argv)
          osal_usleep(1000);
       }
    }
+   /* driver-level gate, identical rules to hand_ctl */
+   guarded  = hs_stall_relief(tgt, &in[18], &in[30], &in[6], why, sizeof why);
+   guarded += hs_interlock(tgt, &in[6], why, sizeof why);
    for (i = 1; i <= 6; i++) out[i] = tgt[i - 1];
    for (t = 0; t < 800; t++) { pd(); osal_usleep(1000); }
+   if (guarded) printf("guard: %s\n", why);
    printf("parked [%d %d %d %d %d %d] STA=[%d %d %d %d %d %d] ANG=[%d %d %d %d %d %d]\n",
           tgt[0], tgt[1], tgt[2], tgt[3], tgt[4], tgt[5],
           in[30], in[31], in[32], in[33], in[34], in[35],
           in[6], in[7], in[8], in[9], in[10], in[11]);
    ecx_close(&ctx);
+   hs_unlock(lock_fd);
    return 0;
 }

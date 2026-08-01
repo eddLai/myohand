@@ -38,17 +38,27 @@ reveal the realtime execution trigger.
 
 ## Safety
 
-`hand_ctl` enforces:
+Every binary routes its targets through the shared driver layer
+(`hand_safety.c`) before they reach the PDO, so no caller — Python API,
+HTTP server, teleop, or an ad-hoc script — can command a pose that jams
+the mechanism:
 
-- collision guard: rejects `index<600 AND thumb_bend<600` together
-  (mechanical clash, trips STA=5); `fist()`/`middle_finger()` stagger phases
-- telemetry reads write `-1` targets only (never zeros: `0` = fist!)
-- `force<=1000` (default 500), `speed 50..1000` (default 800)
+- **joint interlock**: a pose closing index and thumb together lifts the
+  thumb clear (they collide mechanically and trip STA=5); palm-ward thumb
+  rotation is refused while the index is curled. Axes left unchanged
+  (`-1`) are judged by live ANGLEACT, not by the absent command.
+- **stall relief**: an axis found in STA 5/6 or drawing over 400 mA from a
+  previous execution is backed off toward open before anything else is
+  written (a stall observed at 1.1 A / 58 C motivated this).
+- **per-axis profile**: thumb-bend gets a force limit above its
+  1300-1857 g phantom reading, plus a lower speed to offset the headroom.
+- **bus lock**: `flock` serializes masters, since two on one NIC make the
+  slave refuse OPERATIONAL.
+- range clamp 0..2000, `force<=1000` (default 500), `speed 50..1000`.
 
-`teleop_app.py` adds layered guards (fist-like poses force
-`thumb>=1400`, palm-ward thumb rotation requires an open index) and EMA
-smoothing. `hand_set` itself bypasses the `hand_ctl` guards: the shared
-driver-level interlock is tracked as a P1 TODO in the vault ops log.
+Guards clamp rather than reject, so a streaming teleop source degrades to
+a safe pose instead of failing. `hand_ctl` reports what it changed in
+`guarded` / `guard_note`. Offline checks: `make test && ./test_safety`.
 
 ## Build and setup (from a clean clone)
 

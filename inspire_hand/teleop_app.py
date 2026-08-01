@@ -18,8 +18,6 @@ R_MIN, R_MAX = 1.05, 1.85          # flexion ratio range for fingers
 T_MIN, T_MAX = 300, 2000           # robot target clamp (never full crush)
 TH_MIN = 500                       # thumb-bend floor (tracked)
 ROT_MIN = 700                      # thumb-rot floor (tracked)
-GUARD_FINGER, GUARD_THUMB = 700, 1400  # fist-pose collision guard
-GUARD_IDX_OPEN, GUARD_ROT = 800, 1200  # rot may sweep in only if index open
 
 send_lock = threading.Lock()
 last_result = "no send yet"
@@ -49,12 +47,8 @@ def pose_from_landmarks(lm):
     r2 = dist(lm[4], lm[5]) / max(dist(lm[0], lm[5]), 1e-6)
     n2 = min(1.0, max(0.0, (r2 - 0.30) / (0.75 - 0.30)))
     rot = int(ROT_MIN + n2 * (T_MAX - ROT_MIN))
-    # layered collision guards (C layer rejects index<600 & thumb<600 anyway)
-    if sorted(tgt)[1] < GUARD_FINGER:          # fist-like: keep thumb clear
-        thumb = max(thumb, GUARD_THUMB)
-        rot = max(rot, GUARD_ROT)
-    if tgt[3] < GUARD_IDX_OPEN:                # index curled: no palm sweep
-        rot = max(rot, GUARD_ROT)
+    # collision interlock lives in the C driver (hand_safety.c) so every
+    # caller obeys it; nothing is clamped here.
     tgt.append(thumb)
     tgt.append(rot)
     return tgt

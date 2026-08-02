@@ -25,6 +25,23 @@ ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`).
     #   ssh -L 8100:127.0.0.1:8100 eddlai@120.126.83.28
     #   curl -X POST http://127.0.0.1:8100/gesture/open
 
+## Gesture teleop
+
+`run_teleop.sh` opens the webcam window with a SYNC button; `hand_mapping.py`
+turns the skeleton into targets.
+
+Flexion is scored as **joint angles on MediaPipe's world landmarks**, not as
+distance ratios over the projected image. Angles between bones do not change
+when the hand rotates in front of the camera, so the same fist reports the same
+targets from any viewpoint. `test_mapping.py` views a synthetic hand from 45
+orientations and measures the wander: 0 target units for the joint-angle
+mapping, up to 1700 (the entire travel) for the distance-ratio one it replaced.
+
+Because a pose costs the hand two to three seconds, AUTO sync waits for the
+pose to **settle** - five consecutive frames within 120 units - before sending,
+so the hand mirrors what the operator meant to hold rather than a posture that
+merely passed by. The window shows MOVING / SETTLED / SENDING accordingly.
+
 ## Axis order and semantics (F1, reverse-engineered)
 
 Order: `[pinky, ring, middle, index, thumb_bend, thumb_rot]`.

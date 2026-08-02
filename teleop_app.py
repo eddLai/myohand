@@ -79,6 +79,8 @@ def main():
     draw, styles = mp.solutions.drawing_utils, mp.solutions.drawing_styles
     win = "RH56F1 Hand Teleop"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win, args.width + 160, args.height + 90)
+    cv2.moveWindow(win, 40, 60)
     cv2.setMouseCallback(win, on_mouse)
 
     ema = None

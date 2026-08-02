@@ -17,6 +17,7 @@ import cv2
 import mediapipe as mp
 
 import hand_mapping as hm
+import teleop_ui as ui
 
 SEND_CMD = ["/home/eddlai/inspire_hand/soem_build/hand_set"]  # lean path ~2-3s
 SETTLE_FRAMES = 5      # consecutive quiet frames before AUTO fires
@@ -25,29 +26,30 @@ DEADBAND = 250         # ignore poses this close to the last one sent
 EMA = 0.65             # smoothing against landmark jitter
 
 send_lock = threading.Lock()
-last_result = "no send yet"
+last_result = "hand idle"
+send_started = None
 auto_sync = False
 last_sent = None
-BTN = (10, 10, 190, 58)
-
 
 def send_pose(tgt):
-    global last_result
+    global last_result, send_started
     if not send_lock.acquire(blocking=False):
         return
     def work():
-        global last_result
+        global last_result, send_started
         try:
-            t0 = time.perf_counter()
+            t0 = send_started = time.perf_counter()
             r = subprocess.run(SEND_CMD + [str(v) for v in tgt],
                                capture_output=True, text=True, timeout=40)
             dt = time.perf_counter() - t0
             out = (r.stdout + r.stderr).strip().splitlines()
-            tail = out[-1][:56] if out else f"rc={r.returncode}"
-            last_result = f"{dt:.1f}s {tail}"
+            guarded = any("guard" in ln for ln in out)
+            last_result = (f"held back a clash  {dt:.1f}s" if guarded
+                           else f"pose reached the hand  {dt:.1f}s")
         except Exception as e:
-            last_result = f"send error: {e}"
+            last_result = f"hand did not answer: {e}"
         finally:
+            send_started = None
             send_lock.release()
     threading.Thread(target=work, daemon=True).start()
 
@@ -55,7 +57,7 @@ def send_pose(tgt):
 def on_mouse(event, x, y, flags, param):
     global auto_sync
     if event == cv2.EVENT_LBUTTONDOWN:
-        x0, y0, x1, y1 = BTN
+        x0, y0, x1, y1 = ui.SYNC_BTN
         if x0 <= x <= x1 and y0 <= y <= y1:
             auto_sync = not auto_sync
 
@@ -82,7 +84,6 @@ def main():
     ema = None
     quiet = 0
     fps_t, fps = time.time(), 0.0
-    names = ["PKY", "RNG", "MID", "IDX", "THB", "ROT"]
 
     while True:
         ok, frame = cap.read()
@@ -106,42 +107,28 @@ def main():
             moved = max(abs(a - b) for a, b in zip(ema, raw))
             quiet = quiet + 1 if moved < SETTLE_TOL else 0
             tgt = ema[:]
-            for i, v in enumerate(tgt):
-                x = 210 + i * 118
-                cv2.putText(frame, f"{names[i]} {v}", (x, 34),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-                cv2.rectangle(frame, (x, 44), (x + 100, 56), (80, 80, 80), 1)
-                cv2.rectangle(frame, (x, 44), (x + int(v / 2000 * 100), 56),
-                              (60, 220, 60), -1)
         else:
             quiet = 0
 
-        x0, y0, x1, y1 = BTN
-        cv2.rectangle(frame, (x0, y0), (x1, y1),
-                      (40, 200, 40) if auto_sync else (60, 60, 200), -1)
-        cv2.putText(frame, f"SYNC {'ON' if auto_sync else 'OFF'}",
-                    (x0 + 18, y0 + 33), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
-                    (255, 255, 255), 2)
-        if send_lock.locked():
-            state, tint = "SENDING", (0, 200, 255)
+        busy = send_lock.locked()
+        ui.draw_gauge(frame, tgt, busy)
+        ui.draw_sync(frame, auto_sync)
+        elapsed = (time.perf_counter() - send_started) if send_started else None
+        if busy:
+            headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET
         elif tgt is None:
-            state, tint = "NO HAND", (150, 150, 150)
+            headline, hint, tone = "Show your hand", "hold it in view of the camera", ui.CREAM
         elif quiet >= SETTLE_FRAMES:
-            state, tint = "SETTLED", (60, 220, 60)
+            headline, hint, tone = (("Sending", "auto sync is on", ui.AMBER) if auto_sync
+                                    else ("Ready", "press space to send this pose", ui.AMBER))
         else:
-            state, tint = "MOVING", (200, 200, 60)
-        cv2.putText(frame, state, (x1 + 14, y0 + 36),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, tint, 2)
-        cv2.putText(frame, "SPACE send once | A auto | Q quit",
-                    (10, frame.shape[0] - 34), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                    (200, 200, 200), 1)
-        cv2.putText(frame, f"robot: {last_result}", (10, frame.shape[0] - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            headline, hint, tone = "Hold still", "the pose sends once it settles", ui.CREAM
         now = time.time()
         fps = 0.9 * fps + 0.1 * (1.0 / max(now - fps_t, 1e-3))
         fps_t = now
-        cv2.putText(frame, f"{fps:4.1f} FPS", (frame.shape[1] - 110, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        ui.draw_rail(frame, headline, hint, tone, min(1.0, quiet / SETTLE_FRAMES),
+                     elapsed, last_result, fps,
+                     "space  send now      a  auto sync      q  quit")
 
         if (tgt and auto_sync and quiet >= SETTLE_FRAMES
                 and not send_lock.locked()

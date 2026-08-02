@@ -37,6 +37,13 @@ targets from any viewpoint. `test_mapping.py` views a synthetic hand from 45
 orientations and measures the wander: 0 target units for the joint-angle
 mapping, up to 1700 (the entire travel) for the distance-ratio one it replaced.
 
+The window itself is an instrument panel (`teleop_ui.py`), built for an
+operator whose eyes are on their own hand: one large line says what to do next
+("Hold still", "Ready", "Hand moving"), and a schematic of the right hand shows
+the commanded posture, thumb included - that thumb swings with the rotation
+axis, so the gauge reads as a hand rather than as a bar chart. Amber means
+ready, violet means the hand is executing.
+
 Because a pose costs the hand two to three seconds, AUTO sync waits for the
 pose to **settle** - five consecutive frames within 120 units - before sending,
 so the hand mirrors what the operator meant to hold rather than a posture that

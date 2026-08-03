@@ -12,7 +12,7 @@ pose costs the hand two to three seconds, AUTO waits for the pose to
 settle and sends what the operator meant to hold, not what passed by
 mid-transition.
 """
-import argparse, subprocess, threading, time
+import argparse, re, subprocess, threading, time
 import cv2
 import mediapipe as mp
 
@@ -32,6 +32,8 @@ auto_sync = False
 last_sent = None
 cal = None                 # {feature: [min, max]} while calibrating
 cal_note = ""
+actual = None              # where the hand reported it got to, in target units
+PARK = [2000] * 6          # every joint open - the pose to leave the hand in
 
 def send_pose(tgt):
     global last_result, send_started
@@ -46,6 +48,7 @@ def send_pose(tgt):
             dt = time.perf_counter() - t0
             out = (r.stdout + r.stderr).strip().splitlines()
             guarded = any("guard" in ln for ln in out)
+            read_back(out)
             last_result = (f"held back a clash  {dt:.1f}s" if guarded
                            else f"pose reached the hand  {dt:.1f}s")
         except Exception as e:
@@ -54,6 +57,17 @@ def send_pose(tgt):
             send_started = None
             send_lock.release()
     threading.Thread(target=work, daemon=True).start()
+
+
+def read_back(lines):
+    """hand_set already reports where the joints ended up; keep it instead
+    of throwing the line away, so the gauge can show both readings."""
+    global actual
+    for ln in lines:
+        m = re.search(r"ANG=\[([-\d ]+)\]", ln)
+        if m:
+            actual = [hm.target_from_angle(v) for v in m.group(1).split()]
+            return
 
 
 def hit(rect, x, y):
@@ -90,6 +104,8 @@ def on_mouse(event, x, y, flags, param):
             auto_sync = not auto_sync
         elif hit(ui.CAL_BTN, x, y):
             toggle_calibration()
+        elif hit(ui.PARK_BTN, x, y):
+            send_pose(PARK)
 
 
 def main():
@@ -147,11 +163,12 @@ def main():
             quiet = 0
 
         busy = send_lock.locked()
-        ui.draw_gauge(frame, tgt, busy)
+        ui.draw_gauge(frame, tgt, busy, actual)
         ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
                        "SYNC ON" if auto_sync else "SYNC OFF")
         ui.draw_button(frame, ui.CAL_BTN, cal is not None,
                        "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET)
+        ui.draw_button(frame, ui.PARK_BTN, False, "OPEN HAND")
         elapsed = (time.perf_counter() - send_started) if send_started else None
         if cal is not None:
             n = cal.get("abd", (0, 0))
@@ -173,7 +190,7 @@ def main():
         fps_t = now
         ui.draw_rail(frame, headline, hint, tone, min(1.0, quiet / SETTLE_FRAMES),
                      elapsed, cal_note or last_result, fps,
-                     "space  send now      a  auto sync      c  calibrate      q  quit")
+                     "space  send now      a  auto sync      c  calibrate      o  open hand      q  quit")
 
         if (tgt and auto_sync and quiet >= SETTLE_FRAMES
                 and not send_lock.locked()
@@ -193,6 +210,8 @@ def main():
             auto_sync = not auto_sync
         elif k == ord("c"):
             toggle_calibration()
+        elif k == ord("o"):
+            send_pose(PARK)
 
     cap.release()
     cv2.destroyAllWindows()

@@ -31,6 +31,15 @@ ABD_MIN, ABD_MAX = 10.0, 50.0            # thumb abduction from the palm plane; 
 T_MIN, T_MAX = 300, 2000                 # robot targets; never command a full crush
 ROT_MIN = 700
 
+ANG_CLOSED, ANG_OPEN = 890, 1850         # ANGLEACT span measured on this unit
+
+
+def target_from_angle(ang):
+    """Where a joint actually sits, on the same scale the targets use."""
+    span = (int(ang) - ANG_CLOSED) * 2000 / (ANG_OPEN - ANG_CLOSED)
+    return max(0, min(2000, int(span)))
+
+
 CAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
 
 

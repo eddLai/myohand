@@ -21,8 +21,8 @@ for head, hint, tone, sf, secs, tgt, busy, sync, tele in states:
     f = base.copy()
     ui.draw_gauge(f, tgt, busy, [1904, 1866, 1870, 12, 1010, 1985] if tgt else None)
     ui.draw_button(f, ui.SYNC_BTN, sync, "SYNC ON" if sync else "SYNC OFF")
-    ui.draw_button(f, ui.CAL_BTN, False, "CALIBRATE", ui.VIOLET)
-    ui.draw_button(f, ui.PARK_BTN, False, "OPEN HAND")
+    ui.draw_button(f, ui.CAL_BTN, False, "CALIBRATE", ui.VIOLET, enabled=not busy)
+    ui.draw_button(f, ui.PARK_BTN, False, "OPEN HAND", enabled=not busy)
     ui.draw_button(f, ui.SET_BTN, sync, "SETTINGS", ui.VIOLET)
     if sync:
         ui.draw_settings(f, {"force": 500, "speed": 1000, "device": 4, "ema": 65})

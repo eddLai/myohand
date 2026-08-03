@@ -59,7 +59,7 @@ def send_pose(tgt):
             last_result = (f"held back a clash  {dt:.1f}s" if guarded
                            else f"pose reached the hand  {dt:.1f}s")
         except Exception as e:
-            last_result = f"hand did not answer: {e}"
+            last_result = "hand did not answer - check its power and the RJ45 link"
         finally:
             send_started = None
             send_lock.release()
@@ -196,8 +196,9 @@ def main():
         ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
                        "SYNC ON" if auto_sync else "SYNC OFF")
         ui.draw_button(frame, ui.CAL_BTN, cal is not None,
-                       "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET)
-        ui.draw_button(frame, ui.PARK_BTN, False, "OPEN HAND")
+                       "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET,
+                       enabled=not busy)
+        ui.draw_button(frame, ui.PARK_BTN, False, "OPEN HAND", enabled=not busy)
         ui.draw_button(frame, ui.SET_BTN, show_settings, "SETTINGS", ui.VIOLET)
         if show_settings:
             ui.draw_settings(frame, SETTINGS)

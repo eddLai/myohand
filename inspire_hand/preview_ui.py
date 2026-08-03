@@ -19,10 +19,12 @@ states = [
 tiles = []
 for head, hint, tone, sf, secs, tgt, busy, sync, tele in states:
     f = base.copy()
-    ui.draw_gauge(f, tgt, busy)
-    ui.draw_sync(f, sync)
+    ui.draw_gauge(f, tgt, busy, [1904, 1866, 1870, 12, 1010, 1985] if tgt else None)
+    ui.draw_button(f, ui.SYNC_BTN, sync, "SYNC ON" if sync else "SYNC OFF")
+    ui.draw_button(f, ui.CAL_BTN, False, "CALIBRATE", ui.VIOLET)
+    ui.draw_button(f, ui.PARK_BTN, False, "OPEN HAND")
     ui.draw_rail(f, head, hint, tone, sf, secs, tele, 29.4,
-                 "space  send now      a  auto sync      q  quit")
+                 "space  send now      a  auto sync      c  calibrate      o  open hand      q  quit")
     tiles.append(f)
 cv2.imwrite("/tmp/ui_preview.png",
             np.vstack([np.hstack(tiles[:2]), np.hstack(tiles[2:])]))

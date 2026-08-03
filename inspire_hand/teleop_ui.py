@@ -34,6 +34,7 @@ FINGERS = (("IDX", 3, 0.94), ("MID", 2, 1.00), ("RNG", 1, 0.92), ("PKY", 0, 0.72
 BAR_W, BAR_GAP, BAR_MAX = 24, 16, 88
 SYNC_BTN = (16, 16, 172, 64)
 CAL_BTN = (184, 16, 330, 64)
+PARK_BTN = (342, 16, 452, 64)
 
 
 def _panel(img, x, y, w, h, border=None, alpha=0.72):
@@ -46,6 +47,13 @@ def _panel(img, x, y, w, h, border=None, alpha=0.72):
         cv2.rectangle(img, (x, y), (x + w, y + h), border, 1, cv2.LINE_AA)
 
 
+def _reached(img, x, base_y, length, frac, color):
+    """A tick where the hand actually got to, against the fill it was asked
+    for. The two separate whenever a guard clamps or an axis stalls."""
+    y = base_y - int(length * frac)
+    cv2.line(img, (x - 3, y), (x + BAR_W + 3, y), color, 2, cv2.LINE_AA)
+
+
 def _finger(img, x, base_y, length, frac, color):
     """A finger stands as tall as it is extended; the unlit remainder is
     a hairline so a closed hand reads as a short finger, not as an empty
@@ -56,6 +64,17 @@ def _finger(img, x, base_y, length, frac, color):
     if lit > 3:
         cv2.rectangle(img, (x, base_y - lit), (x + BAR_W, base_y), color, -1)
         cv2.rectangle(img, (x, base_y - lit), (x + BAR_W, base_y), PANEL, 1, cv2.LINE_AA)
+
+
+def _thumb_reached(img, pivot, length, frac, angle_deg, color):
+    a = math.radians(angle_deg)
+    ux, uy = math.cos(a), -math.sin(a)
+    px, py = -uy, ux
+    d, half = length * frac, BAR_W / 2 + 3
+    cv2.line(img,
+             (int(pivot[0] + ux * d + px * half), int(pivot[1] + uy * d + py * half)),
+             (int(pivot[0] + ux * d - px * half), int(pivot[1] + uy * d - py * half)),
+             color, 2, cv2.LINE_AA)
 
 
 def _thumb(img, pivot, length, frac, angle_deg, color):
@@ -79,12 +98,14 @@ def _thumb(img, pivot, length, frac, angle_deg, color):
         cv2.polylines(img, [quad(reach)], True, PANEL, 1, cv2.LINE_AA)
 
 
-def draw_gauge(img, tgt, executing):
+def draw_gauge(img, tgt, executing, actual=None):
     """Schematic of the posture the robot hand has been commanded to hold."""
     x0, y0, w, h = 606, 14, 340, 200
     _panel(img, x0, y0, w, h, border=SLATE)
     cv2.putText(img, "COMMANDED POSTURE", (x0 + 14, y0 + 22),
                 LABEL, 0.42, SLATE, 1, cv2.LINE_AA)
+    if actual:
+        cv2.putText(img, "- reached", (x0 + 152, y0 + 22), LABEL, 0.42, CREAM, 1, cv2.LINE_AA)
 
     base_y = y0 + 140
     span = 4 * BAR_W + 3 * BAR_GAP
@@ -101,14 +122,20 @@ def draw_gauge(img, tgt, executing):
         length = int(BAR_MAX * rel)
         frac = 0.0 if ghost else max(0.0, min(1.0, tgt[idx] / 2000))
         _finger(img, x, base_y - 1, length, frac, tone)
+        if actual:
+            _reached(img, x, base_y - 1, length,
+                     max(0.0, min(1.0, actual[idx] / 2000)), CREAM)
         if not ghost:
             cv2.putText(img, label, (x - 1, base_y + 46), METER, 0.8, SLATE, 1, cv2.LINE_AA)
         x += BAR_W + BAR_GAP
     # thumb hinges off the palm's outer edge; tucked at 108deg, splayed at 168deg
     rot = 700 if ghost else max(700, min(2000, tgt[5]))
+    swing = 108 + (rot - 700) / 1300 * 60
     _thumb(img, (palm_x + 4, base_y + 18), 76,
-           0.0 if ghost else max(0.0, min(1.0, tgt[4] / 2000)),
-           108 + (rot - 700) / 1300 * 60, tone)
+           0.0 if ghost else max(0.0, min(1.0, tgt[4] / 2000)), swing, tone)
+    if actual:
+        _thumb_reached(img, (palm_x + 4, base_y + 18), 76,
+                       max(0.0, min(1.0, actual[4] / 2000)), swing, CREAM)
     if ghost:
         cv2.putText(img, "waiting for a hand", (x0 + 14, base_y + 46),
                     LABEL, 0.46, SLATE, 1, cv2.LINE_AA)

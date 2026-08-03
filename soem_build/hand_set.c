@@ -22,8 +22,16 @@ int main(int argc, char **argv)
    int16_t *out, *in, tgt[6];
    int i, chk, t, need_wake, lock_fd, guarded;
    char why[256] = {0};
-   if (argc < 7) { printf("usage: hand_set p r m i tb tr (0-2000, -1=hold)\n"); return 1; }
+   int force = 500, speed = 1000;
+   if (argc < 7) {
+      printf("usage: hand_set p r m i tb tr [force] [speed]  (0-2000, -1=hold)\n");
+      return 1;
+   }
    for (i = 0; i < 6; i++) tgt[i] = (int16_t)atoi(argv[i + 1]);
+   if (argc > 7) force = atoi(argv[7]);
+   if (argc > 8) speed = atoi(argv[8]);
+   if (force < 0) force = 0; if (force > 1000) force = 1000;
+   if (speed < 50) speed = 50; if (speed > 1000) speed = 1000;
 
    lock_fd = hs_lock(20);
    if (lock_fd < 0) { printf("bus busy: another master holds the hand\n"); return 3; }
@@ -45,7 +53,7 @@ int main(int argc, char **argv)
 
    memset(out, 0, ctx.slavelist[1].Obytes);
    out[0] = 1;
-   hs_profile(out, 500, 1000);   /* shared per-axis force/speed profile */
+   hs_profile(out, force, speed);   /* shared per-axis force/speed profile */
    for (i = 1; i <= 6; i++)   out[i] = -1;
    for (t = 0; t < 200; t++) { pd(); osal_usleep(1000); }
 

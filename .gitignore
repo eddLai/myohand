@@ -12,3 +12,4 @@ __pycache__/
 *.o
 dist/
 test_safety
+teleop_settings.json

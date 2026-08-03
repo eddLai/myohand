@@ -99,3 +99,29 @@ print(f"worst-case wander over all postures and views:")
 print(f"  joint angles on world landmarks : {worst_new} target units")
 print(f"  distance ratios on projected xy : {worst_old} target units")
 print(f"  (full travel is 1700 units, so {worst_old / 17:.0f}% of range for the old mapping)")
+
+
+# --- extremes: direction is a property of the mapping, reach is calibration ---
+def sweep(param, values):
+    out = []
+    for v in values:
+        pts = build_hand(20.0, **{param: v})
+        out.append(hm.pose_from_world_landmarks(view(pts, 0, 0, 0)))
+    return out
+
+
+print("\n--- thumb at its extremes ---")
+bend = [t[4] for t in sweep("thumb_curl_deg", range(0, 101, 10))]
+rot = [t[5] for t in sweep("thumb_abduct_deg", range(0, 91, 10))]
+fail = 0
+for name, series, rising in (("bend vs curl", bend, False), ("rot vs abduction", rot, True)):
+    ok = all((b >= a) == rising or a == b for a, b in zip(series, series[1:]))
+    print(f"{name:18s} monotonic {'up' if rising else 'down'}: {'ok' if ok else 'FAIL'}"
+          f"   reaches {min(series)}..{max(series)}")
+    fail += not ok
+print(f"unreachable head-room: bend {hm.T_MAX - max(bend)} units, "
+      f"rot {hm.T_MAX - max(rot)} units")
+print("(head-room is a calibration reading, not a failure: the synthetic thumb"
+      " carries a built-in bend, so run calibrate.py against a real hand)")
+if fail:
+    print("DIRECTION FAILURE")

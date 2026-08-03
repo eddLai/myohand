@@ -27,7 +27,7 @@ hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
 seen = {k: [] for k in FEATURES}
 print(f"move through the full range for {secs:.0f}s: fingers open to fist, "
       f"thumb tucked to splayed")
-t0 = time.time()
+t0 = last = time.time()
 while time.time() - t0 < secs:
     ok, frame = cap.read()
     if not ok:
@@ -37,6 +37,11 @@ while time.time() - t0 < secs:
         lm = res.multi_hand_world_landmarks[0].landmark
         for k, f in FEATURES.items():
             seen[k].append(f(lm))
+    if time.time() - last > 2:
+        last = time.time()
+        n = len(seen["thumb abduction"])
+        print(f"  {secs - (last - t0):4.0f}s left   "
+              f"{'tracking, keep moving' if n else 'no hand in frame yet'}", flush=True)
 cap.release()
 
 if not seen["thumb abduction"]:
@@ -44,7 +49,11 @@ if not seen["thumb abduction"]:
 for k, v in seen.items():
     print(f"{k:20s} {min(v):6.1f} .. {max(v):6.1f}  ({len(v)} frames)")
 c, t, a = seen["finger curl"], seen["thumb curl"], seen["thumb abduction"]
-print("\nsuggested constants for hand_mapping.py:")
-print(f"CURL_OPEN, CURL_CLOSED = {min(c):.1f}, {max(seen['finger curl (max)']):.1f}")
-print(f"THUMB_OPEN, THUMB_CLOSED = {min(t):.1f}, {max(t):.1f}")
-print(f"ABD_MIN, ABD_MAX = {min(a):.1f}, {max(a):.1f}")
+win = {"CURL_OPEN": round(min(c), 1),
+       "CURL_CLOSED": round(max(seen["finger curl (max)"]), 1),
+       "THUMB_OPEN": round(min(t), 1), "THUMB_CLOSED": round(max(t), 1),
+       "ABD_MIN": round(min(a), 1), "ABD_MAX": round(max(a), 1)}
+hm.save_calibration(win)
+print(f"\nsaved to {hm.CAL_PATH}:")
+for k, v in win.items():
+    print(f"  {k} = {v}")

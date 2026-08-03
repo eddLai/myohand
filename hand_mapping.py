@@ -11,7 +11,9 @@ angles. An angle between two bones is invariant to how the hand is
 rotated or how far away it sits, so the same fist reports the same
 targets from any viewpoint.
 """
+import json
 import math
+import os
 
 # landmark ids: wrist 0, thumb 1-4, index 5-8, middle 9-12, ring 13-16, pinky 17-20
 FINGER_CHAINS = {          # (mcp, pip, dip, tip)
@@ -28,6 +30,33 @@ ABD_MIN, ABD_MAX = 10.0, 50.0            # thumb abduction from the palm plane; 
 
 T_MIN, T_MAX = 300, 2000                 # robot targets; never command a full crush
 ROT_MIN = 700
+
+CAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
+
+
+def raw_features(lm):
+    """The angles the windows above are calibrated against."""
+    curls = [finger_curl(lm, c) for c in FINGER_CHAINS.values()]
+    return {"curl_lo": min(curls), "curl_hi": max(curls),
+            "thumb": _joint_angle(lm, 1, 2, 3) + _joint_angle(lm, 2, 3, 4),
+            "abd": thumb_abduction(lm)}
+
+
+def load_calibration(path=CAL_PATH):
+    """Prefer windows measured from a real hand over the defaults."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return None
+    globals().update({k: v for k, v in data.items() if k in globals()})
+    return data
+
+
+def save_calibration(data, path=CAL_PATH):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    globals().update({k: v for k, v in data.items() if k in globals()})
 
 
 def _sub(a, b):
@@ -118,3 +147,6 @@ def pose_legacy(lm):
     r2 = d2(lm[4], lm[5]) / max(d2(lm[0], lm[5]), 1e-6)
     tgt.append(_scale(r2, 0.30, 0.75, ROT_MIN, T_MAX))
     return tgt
+
+
+load_calibration()

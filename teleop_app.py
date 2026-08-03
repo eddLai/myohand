@@ -30,6 +30,8 @@ last_result = "hand idle"
 send_started = None
 auto_sync = False
 last_sent = None
+cal = None                 # {feature: [min, max]} while calibrating
+cal_note = ""
 
 def send_pose(tgt):
     global last_result, send_started
@@ -54,12 +56,40 @@ def send_pose(tgt):
     threading.Thread(target=work, daemon=True).start()
 
 
+def hit(rect, x, y):
+    x0, y0, x1, y1 = rect
+    return x0 <= x <= x1 and y0 <= y <= y1
+
+
+def toggle_calibration():
+    """Start recording the operator's range, or close it out and keep the
+    windows if they actually moved far enough to define one."""
+    global cal, cal_note
+    if cal is None:
+        cal, cal_note = {}, "move through your full range"
+        return
+    span = {k: v[1] - v[0] for k, v in cal.items()}
+    if not cal or span.get("curl_hi", 0) < 40 or span.get("abd", 0) < 15:
+        cal, cal_note = None, "range too small - discarded"
+        return
+    hm.save_calibration({
+        "CURL_OPEN": round(cal["curl_lo"][0], 1),
+        "CURL_CLOSED": round(cal["curl_hi"][1], 1),
+        "THUMB_OPEN": round(cal["thumb"][0], 1),
+        "THUMB_CLOSED": round(cal["thumb"][1], 1),
+        "ABD_MIN": round(cal["abd"][0], 1),
+        "ABD_MAX": round(cal["abd"][1], 1),
+    })
+    cal, cal_note = None, "calibrated and saved"
+
+
 def on_mouse(event, x, y, flags, param):
     global auto_sync
     if event == cv2.EVENT_LBUTTONDOWN:
-        x0, y0, x1, y1 = ui.SYNC_BTN
-        if x0 <= x <= x1 and y0 <= y <= y1:
+        if hit(ui.SYNC_BTN, x, y):
             auto_sync = not auto_sync
+        elif hit(ui.CAL_BTN, x, y):
+            toggle_calibration()
 
 
 def main():
@@ -106,6 +136,10 @@ def main():
                 ema = raw[:]
             else:
                 ema = [int(EMA * e + (1 - EMA) * r) for e, r in zip(ema, raw)]
+            if cal is not None:
+                for k, v in hm.raw_features(res.multi_hand_world_landmarks[0].landmark).items():
+                    lo, hi = cal.get(k, (v, v))
+                    cal[k] = (min(lo, v), max(hi, v))
             moved = max(abs(a - b) for a, b in zip(ema, raw))
             quiet = quiet + 1 if moved < SETTLE_TOL else 0
             tgt = ema[:]
@@ -114,9 +148,18 @@ def main():
 
         busy = send_lock.locked()
         ui.draw_gauge(frame, tgt, busy)
-        ui.draw_sync(frame, auto_sync)
+        ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
+                       "SYNC ON" if auto_sync else "SYNC OFF")
+        ui.draw_button(frame, ui.CAL_BTN, cal is not None,
+                       "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET)
         elapsed = (time.perf_counter() - send_started) if send_started else None
-        if busy:
+        if cal is not None:
+            n = cal.get("abd", (0, 0))
+            headline = "Calibrating"
+            hint = ("open wide, make a fist, tuck and splay the thumb - "
+                    f"thumb spread so far {n[1] - n[0]:.0f} deg")
+            tone = ui.VIOLET
+        elif busy:
             headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET
         elif tgt is None:
             headline, hint, tone = "Show your hand", "hold it in view of the camera", ui.CREAM
@@ -129,8 +172,8 @@ def main():
         fps = 0.9 * fps + 0.1 * (1.0 / max(now - fps_t, 1e-3))
         fps_t = now
         ui.draw_rail(frame, headline, hint, tone, min(1.0, quiet / SETTLE_FRAMES),
-                     elapsed, last_result, fps,
-                     "space  send now      a  auto sync      q  quit")
+                     elapsed, cal_note or last_result, fps,
+                     "space  send now      a  auto sync      c  calibrate      q  quit")
 
         if (tgt and auto_sync and quiet >= SETTLE_FRAMES
                 and not send_lock.locked()
@@ -148,6 +191,8 @@ def main():
             send_pose(tgt)
         elif k == ord("a"):
             auto_sync = not auto_sync
+        elif k == ord("c"):
+            toggle_calibration()
 
     cap.release()
     cv2.destroyAllWindows()

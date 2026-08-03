@@ -33,6 +33,7 @@ METER = cv2.FONT_HERSHEY_PLAIN
 FINGERS = (("IDX", 3, 0.94), ("MID", 2, 1.00), ("RNG", 1, 0.92), ("PKY", 0, 0.72))
 BAR_W, BAR_GAP, BAR_MAX = 24, 16, 88
 SYNC_BTN = (16, 16, 172, 64)
+CAL_BTN = (184, 16, 330, 64)
 
 
 def _panel(img, x, y, w, h, border=None, alpha=0.72):
@@ -115,11 +116,11 @@ def draw_gauge(img, tgt, executing):
         cv2.putText(img, "THUMB", (x0 + 26, base_y + 46), METER, 0.8, SLATE, 1, cv2.LINE_AA)
 
 
-def draw_sync(img, on):
-    x0, y0, x1, y1 = SYNC_BTN
-    _panel(img, x0, y0, x1 - x0, y1 - y0, border=AMBER if on else SLATE, alpha=0.8)
-    cv2.circle(img, (x0 + 22, (y0 + y1) // 2), 6, AMBER if on else SLATE, -1, cv2.LINE_AA)
-    cv2.putText(img, "SYNC ON" if on else "SYNC OFF", (x0 + 40, y1 - 18),
+def draw_button(img, rect, on, label, tone=AMBER):
+    x0, y0, x1, y1 = rect
+    _panel(img, x0, y0, x1 - x0, y1 - y0, border=tone if on else SLATE, alpha=0.8)
+    cv2.circle(img, (x0 + 22, (y0 + y1) // 2), 6, tone if on else SLATE, -1, cv2.LINE_AA)
+    cv2.putText(img, label, (x0 + 40, y1 - 18),
                 LABEL, 0.6, CREAM if on else SLATE, 1, cv2.LINE_AA)
 
 

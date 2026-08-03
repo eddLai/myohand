@@ -20,7 +20,8 @@ AMBER = (60, 132, 245)      # #F5843C  ready / commanded posture
 VIOLET = (217, 84, 140)     # #8C54D9  hand is executing
 ROSE = (108, 51, 214)       # #D6336C  blocked or absent
 CREAM = (244, 249, 251)     # #FBF9F4  primary text
-SLATE = (105, 100, 96)      # inactive tracks and secondary rules
+QUIET = (177, 188, 196)     # secondary text, tinted warm off CREAM, >=5:1 on video
+SLATE = (105, 100, 96)      # strokes and inactive tracks only - too dark for text
 PANEL = (20, 17, 15)
 
 DISPLAY = cv2.FONT_HERSHEY_TRIPLEX
@@ -111,10 +112,10 @@ def _thumb(img, pivot, length, frac, angle_deg, color):
 
 def draw_gauge(img, tgt, executing, actual=None):
     """Schematic of the posture the robot hand has been commanded to hold."""
-    x0, y0, w, h = 606, 14, 340, 200
-    _panel(img, x0, y0, w, h, border=SLATE)
+    x0, y0, w, h = 606, 80, 340, 200   # shares a baseline with the settings plate
+    _panel(img, x0, y0, w, h, border=SLATE, alpha=0.85)
     cv2.putText(img, "COMMANDED POSTURE", (x0 + 14, y0 + 22),
-                LABEL, 0.42, SLATE, 1, cv2.LINE_AA)
+                LABEL, 0.42, QUIET, 1, cv2.LINE_AA)
     if actual:
         cv2.putText(img, "- reached", (x0 + 152, y0 + 22), LABEL, 0.42, CREAM, 1, cv2.LINE_AA)
 
@@ -137,7 +138,7 @@ def draw_gauge(img, tgt, executing, actual=None):
             _reached(img, x, base_y - 1, length,
                      max(0.0, min(1.0, actual[idx] / 2000)), CREAM)
         if not ghost:
-            cv2.putText(img, label, (x - 1, base_y + 46), METER, 0.8, SLATE, 1, cv2.LINE_AA)
+            cv2.putText(img, label, (x - 1, base_y + 46), METER, 0.8, QUIET, 1, cv2.LINE_AA)
         x += BAR_W + BAR_GAP
     # thumb hinges off the palm's outer edge; tucked at 108deg, splayed at 168deg
     rot = 700 if ghost else max(700, min(2000, tgt[5]))
@@ -149,37 +150,39 @@ def draw_gauge(img, tgt, executing, actual=None):
                        max(0.0, min(1.0, actual[4] / 2000)), swing, CREAM)
     if ghost:
         cv2.putText(img, "waiting for a hand", (x0 + 14, base_y + 46),
-                    LABEL, 0.46, SLATE, 1, cv2.LINE_AA)
+                    LABEL, 0.46, QUIET, 1, cv2.LINE_AA)
     else:
-        cv2.putText(img, "THUMB", (x0 + 26, base_y + 46), METER, 0.8, SLATE, 1, cv2.LINE_AA)
+        cv2.putText(img, "THUMB", (x0 + 26, base_y + 46), METER, 0.8, QUIET, 1, cv2.LINE_AA)
 
 
-def draw_button(img, rect, on, label, tone=AMBER):
+def draw_button(img, rect, on, label, tone=AMBER, enabled=True):
     x0, y0, x1, y1 = rect
-    _panel(img, x0, y0, x1 - x0, y1 - y0, border=tone if on else SLATE, alpha=0.8)
-    cv2.circle(img, (x0 + 22, (y0 + y1) // 2), 6, tone if on else SLATE, -1, cv2.LINE_AA)
-    cv2.putText(img, label, (x0 + 40, y1 - 18),
-                LABEL, 0.6, CREAM if on else SLATE, 1, cv2.LINE_AA)
+    edge = tone if on else SLATE
+    _panel(img, x0, y0, x1 - x0, y1 - y0, border=edge if enabled else SLATE, alpha=0.85)
+    cv2.circle(img, (x0 + 22, (y0 + y1) // 2), 6,
+               (tone if on else QUIET) if enabled else SLATE, -1, cv2.LINE_AA)
+    cv2.putText(img, label, (x0 + 40, y1 - 18), LABEL, 0.6,
+                (CREAM if on else QUIET) if enabled else SLATE, 1, cv2.LINE_AA)
 
 
 def draw_rail(img, headline, hint, tone, settle_frac, send_secs, telemetry, fps, keys):
     """One line telling the operator what to do, and how far along it is."""
     h_img, w_img = img.shape[:2]
     x0, y0, w, h = 16, h_img - 104, w_img - 32, 88
-    _panel(img, x0, y0, w, h, border=SLATE)
+    _panel(img, x0, y0, w, h, border=SLATE, alpha=0.85)
     cv2.putText(img, headline, (x0 + 20, y0 + 36), DISPLAY, 0.9, tone, 1, cv2.LINE_AA)
-    cv2.putText(img, hint, (x0 + 22, y0 + 58), LABEL, 0.44, SLATE, 1, cv2.LINE_AA)
+    cv2.putText(img, hint, (x0 + 22, y0 + 58), LABEL, 0.44, QUIET, 1, cv2.LINE_AA)
     cv2.line(img, (x0 + 20, y0 + 68), (x0 + w - 20, y0 + 68), (60, 56, 52), 1)
-    cv2.putText(img, keys, (x0 + 22, y0 + 82), METER, 0.85, SLATE, 1, cv2.LINE_AA)
+    cv2.putText(img, keys, (x0 + 22, y0 + 82), METER, 0.85, QUIET, 1, cv2.LINE_AA)
     cv2.putText(img, telemetry, (x0 + w - 22 - 7 * len(telemetry), y0 + 82),
-                METER, 0.85, SLATE, 1, cv2.LINE_AA)
+                METER, 0.85, QUIET, 1, cv2.LINE_AA)
 
     tx, ty = x0 + w - 250, y0 + 30
     for i in range(5):
         lit = settle_frac * 5 > i
         cv2.rectangle(img, (tx + i * 16, ty - 10), (tx + i * 16 + 10, ty),
                       tone if lit else SLATE, -1 if lit else 1, cv2.LINE_AA)
-    cv2.putText(img, "SETTLE", (tx + 92, ty - 1), METER, 0.8, SLATE, 1, cv2.LINE_AA)
+    cv2.putText(img, "SETTLE", (tx + 92, ty - 1), METER, 0.8, QUIET, 1, cv2.LINE_AA)
     if send_secs is not None:
         cv2.rectangle(img, (tx, ty + 12), (tx + 160, ty + 20), SLATE, 1, cv2.LINE_AA)
         span = int(min(1.0, send_secs / 3.0) * 158)
@@ -187,7 +190,7 @@ def draw_rail(img, headline, hint, tone, settle_frac, send_secs, telemetry, fps,
         cv2.putText(img, f"{send_secs:.1f}s", (tx + 168, ty + 20),
                     METER, 0.9, VIOLET, 1, cv2.LINE_AA)
     cv2.putText(img, f"{fps:.0f} fps", (x0 + w - 60, y0 + 20),
-                METER, 0.8, SLATE, 1, cv2.LINE_AA)
+                METER, 0.8, QUIET, 1, cv2.LINE_AA)
 
 
 def _row_y(i):
@@ -200,7 +203,7 @@ def draw_settings(img, values):
     _panel(img, x0, y0, w, h, border=VIOLET, alpha=0.9)
     cv2.putText(img, "SETTINGS", (x0 + 20, y0 + 26), LABEL, 0.5, VIOLET, 1, cv2.LINE_AA)
     cv2.putText(img, "applied to the next pose you send", (x0 + 20, y0 + 46),
-                LABEL, 0.4, SLATE, 1, cv2.LINE_AA)
+                LABEL, 0.4, QUIET, 1, cv2.LINE_AA)
     for i, (label, key, _s, _lo, _hi, unit) in enumerate(ROWS):
         y = _row_y(i)
         cv2.putText(img, label, (x0 + 20, y + 22), LABEL, 0.52, CREAM, 1, cv2.LINE_AA)

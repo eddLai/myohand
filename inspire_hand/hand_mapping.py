@@ -24,7 +24,7 @@ THUMB_CHAIN = (1, 2, 3, 4)  # cmc, mcp, ip, tip
 
 CURL_OPEN, CURL_CLOSED = 15.0, 150.0     # total curl in degrees
 THUMB_OPEN, THUMB_CLOSED = 15.0, 110.0
-ABD_MIN, ABD_MAX = 18.0, 60.0            # thumb abduction from the palm plane
+ABD_MIN, ABD_MAX = 10.0, 50.0            # thumb abduction from the palm plane; see calibrate.py
 
 T_MIN, T_MAX = 300, 2000                 # robot targets; never command a full crush
 ROT_MIN = 700

@@ -12,7 +12,7 @@ pose costs the hand two to three seconds, AUTO waits for the pose to
 settle and sends what the operator meant to hold, not what passed by
 mid-transition.
 """
-import argparse, re, subprocess, threading, time
+import argparse, json, os, re, subprocess, threading, time
 import cv2
 import mediapipe as mp
 
@@ -23,7 +23,6 @@ SEND_CMD = ["/home/eddlai/inspire_hand/soem_build/hand_set"]  # lean path ~2-3s
 SETTLE_FRAMES = 5      # consecutive quiet frames before AUTO fires
 SETTLE_TOL = 120       # target units counted as "not moving"
 DEADBAND = 250         # ignore poses this close to the last one sent
-EMA = 0.65             # smoothing against landmark jitter
 
 send_lock = threading.Lock()
 last_result = "hand idle"
@@ -34,6 +33,13 @@ cal = None                 # {feature: [min, max]} while calibrating
 cal_note = ""
 actual = None              # where the hand reported it got to, in target units
 PARK = [2000] * 6          # every joint open - the pose to leave the hand in
+show_settings = False
+SET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teleop_settings.json")
+SETTINGS = {"force": 500, "speed": 1000, "device": 4, "ema": 65}
+try:
+    SETTINGS.update(json.load(open(SET_PATH)))
+except FileNotFoundError:
+    pass
 
 def send_pose(tgt):
     global last_result, send_started
@@ -43,7 +49,8 @@ def send_pose(tgt):
         global last_result, send_started
         try:
             t0 = send_started = time.perf_counter()
-            r = subprocess.run(SEND_CMD + [str(v) for v in tgt],
+            r = subprocess.run(SEND_CMD + [str(v) for v in tgt]
+                               + [str(SETTINGS["force"]), str(SETTINGS["speed"])],
                                capture_output=True, text=True, timeout=40)
             dt = time.perf_counter() - t0
             out = (r.stdout + r.stderr).strip().splitlines()
@@ -68,6 +75,11 @@ def read_back(lines):
         if m:
             actual = [hm.target_from_angle(v) for v in m.group(1).split()]
             return
+
+
+def save_settings():
+    with open(SET_PATH, "w") as f:
+        json.dump(SETTINGS, f, indent=2)
 
 
 def hit(rect, x, y):
@@ -98,7 +110,7 @@ def toggle_calibration():
 
 
 def on_mouse(event, x, y, flags, param):
-    global auto_sync
+    global auto_sync, show_settings
     if event == cv2.EVENT_LBUTTONDOWN:
         if hit(ui.SYNC_BTN, x, y):
             auto_sync = not auto_sync
@@ -106,17 +118,27 @@ def on_mouse(event, x, y, flags, param):
             toggle_calibration()
         elif hit(ui.PARK_BTN, x, y):
             send_pose(PARK)
+        elif hit(ui.SET_BTN, x, y):
+            show_settings = not show_settings
+        elif show_settings:
+            knob = ui.settings_hit(x, y)
+            if knob:
+                key, delta, lo, hi = knob
+                SETTINGS[key] = max(lo, min(hi, SETTINGS[key] + delta))
+                save_settings()
 
 
 def main():
-    global auto_sync, last_sent
+    global auto_sync, last_sent, show_settings
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", type=int, default=4)
     ap.add_argument("--width", type=int, default=960)
     ap.add_argument("--height", type=int, default=540)
     args = ap.parse_args()
 
-    cap = cv2.VideoCapture(args.device)
+    SETTINGS["device"] = args.device if args.device != 4 else SETTINGS["device"]
+    cap = cv2.VideoCapture(SETTINGS["device"])
+    opened_device = SETTINGS["device"]
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
     hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
@@ -134,6 +156,12 @@ def main():
     fps_t, fps = time.time(), 0.0
 
     while True:
+        if SETTINGS["device"] != opened_device:     # follow the settings plate
+            cap.release()
+            cap = cv2.VideoCapture(SETTINGS["device"])
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+            opened_device, ema = SETTINGS["device"], None
         ok, frame = cap.read()
         if not ok:
             time.sleep(0.05)
@@ -151,7 +179,8 @@ def main():
             if ema is None:
                 ema = raw[:]
             else:
-                ema = [int(EMA * e + (1 - EMA) * r) for e, r in zip(ema, raw)]
+                w = SETTINGS["ema"] / 100.0
+                ema = [int(w * e + (1 - w) * r) for e, r in zip(ema, raw)]
             if cal is not None:
                 for k, v in hm.raw_features(res.multi_hand_world_landmarks[0].landmark).items():
                     lo, hi = cal.get(k, (v, v))
@@ -169,6 +198,9 @@ def main():
         ui.draw_button(frame, ui.CAL_BTN, cal is not None,
                        "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET)
         ui.draw_button(frame, ui.PARK_BTN, False, "OPEN HAND")
+        ui.draw_button(frame, ui.SET_BTN, show_settings, "SETTINGS", ui.VIOLET)
+        if show_settings:
+            ui.draw_settings(frame, SETTINGS)
         elapsed = (time.perf_counter() - send_started) if send_started else None
         if cal is not None:
             n = cal.get("abd", (0, 0))
@@ -190,7 +222,7 @@ def main():
         fps_t = now
         ui.draw_rail(frame, headline, hint, tone, min(1.0, quiet / SETTLE_FRAMES),
                      elapsed, cal_note or last_result, fps,
-                     "space  send now      a  auto sync      c  calibrate      o  open hand      q  quit")
+                     "space  send      q  quit")
 
         if (tgt and auto_sync and quiet >= SETTLE_FRAMES
                 and not send_lock.locked()
@@ -212,6 +244,8 @@ def main():
             toggle_calibration()
         elif k == ord("o"):
             send_pose(PARK)
+        elif k == ord("s"):
+            show_settings = not show_settings
 
     cap.release()
     cv2.destroyAllWindows()

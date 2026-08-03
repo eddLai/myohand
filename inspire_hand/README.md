@@ -44,6 +44,14 @@ the commanded posture, thumb included - that thumb swings with the rotation
 axis, so the gauge reads as a hand rather than as a bar chart. Amber means
 ready, violet means the hand is executing.
 
+Four controls sit above the video: SYNC mirrors your hand automatically,
+CALIBRATE records your range, OPEN HAND sends every joint open, and SETTINGS
+opens a plate for grip force, speed, camera and smoothing - stepped rather than
+dragged, saved to teleop_settings.json, applied to the next pose. The gauge
+draws two readings: the amber fill is the pose that was asked for, the pale tick
+is where the hand reported it got to. They separate whenever a guard clamps or
+an axis stalls.
+
 Because a pose costs the hand two to three seconds, AUTO sync waits for the
 pose to **settle** - five consecutive frames within 120 units - before sending,
 so the hand mirrors what the operator meant to hold rather than a posture that

@@ -23,8 +23,11 @@ for head, hint, tone, sf, secs, tgt, busy, sync, tele in states:
     ui.draw_button(f, ui.SYNC_BTN, sync, "SYNC ON" if sync else "SYNC OFF")
     ui.draw_button(f, ui.CAL_BTN, False, "CALIBRATE", ui.VIOLET)
     ui.draw_button(f, ui.PARK_BTN, False, "OPEN HAND")
+    ui.draw_button(f, ui.SET_BTN, sync, "SETTINGS", ui.VIOLET)
+    if sync:
+        ui.draw_settings(f, {"force": 500, "speed": 1000, "device": 4, "ema": 65})
     ui.draw_rail(f, head, hint, tone, sf, secs, tele, 29.4,
-                 "space  send now      a  auto sync      c  calibrate      o  open hand      q  quit")
+                 "space  send      q  quit")
     tiles.append(f)
 cv2.imwrite("/tmp/ui_preview.png",
             np.vstack([np.hstack(tiles[:2]), np.hstack(tiles[2:])]))

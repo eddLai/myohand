@@ -34,7 +34,18 @@ FINGERS = (("IDX", 3, 0.94), ("MID", 2, 1.00), ("RNG", 1, 0.92), ("PKY", 0, 0.72
 BAR_W, BAR_GAP, BAR_MAX = 24, 16, 88
 SYNC_BTN = (16, 16, 172, 64)
 CAL_BTN = (184, 16, 330, 64)
-PARK_BTN = (342, 16, 452, 64)
+PARK_BTN = (342, 16, 500, 64)
+SET_BTN = (512, 16, 638, 64)
+
+# The settings plate: one row per knob, stepped rather than dragged, because a
+# click is the only gesture this window has. (label, key, step, low, high, unit)
+ROWS = (("Grip force", "force", 100, 100, 1000, " g"),
+        ("Speed", "speed", 100, 50, 1000, ""),
+        ("Camera", "device", 1, 0, 5, ""),
+        ("Smoothing", "ema", 5, 0, 90, " %"))
+PLATE = (16, 80, 452, 78 + len(ROWS) * 46)
+ROW0, ROWH = 138, 46
+MINUS_X, PLUS_X, STEP_W = 330, 388, 44
 
 
 def _panel(img, x, y, w, h, border=None, alpha=0.72):
@@ -177,3 +188,38 @@ def draw_rail(img, headline, hint, tone, settle_frac, send_secs, telemetry, fps,
                     METER, 0.9, VIOLET, 1, cv2.LINE_AA)
     cv2.putText(img, f"{fps:.0f} fps", (x0 + w - 60, y0 + 20),
                 METER, 0.8, SLATE, 1, cv2.LINE_AA)
+
+
+def _row_y(i):
+    return ROW0 + i * ROWH
+
+
+def draw_settings(img, values):
+    """Values the operator sets once and forgets, kept off the main view."""
+    x0, y0, w, h = PLATE
+    _panel(img, x0, y0, w, h, border=VIOLET, alpha=0.9)
+    cv2.putText(img, "SETTINGS", (x0 + 20, y0 + 26), LABEL, 0.5, VIOLET, 1, cv2.LINE_AA)
+    cv2.putText(img, "applied to the next pose you send", (x0 + 20, y0 + 46),
+                LABEL, 0.4, SLATE, 1, cv2.LINE_AA)
+    for i, (label, key, _s, _lo, _hi, unit) in enumerate(ROWS):
+        y = _row_y(i)
+        cv2.putText(img, label, (x0 + 20, y + 22), LABEL, 0.52, CREAM, 1, cv2.LINE_AA)
+        text = f"{values[key]}{unit}"
+        cv2.putText(img, text, (x0 + 300 - 9 * len(text), y + 22),
+                    LABEL, 0.52, AMBER, 1, cv2.LINE_AA)
+        for bx, sign in ((MINUS_X, "-"), (PLUS_X, "+")):
+            cv2.rectangle(img, (bx, y - 2), (bx + STEP_W, y + 30), SLATE, 1, cv2.LINE_AA)
+            cv2.putText(img, sign, (bx + 17, y + 22), LABEL, 0.6, CREAM, 1, cv2.LINE_AA)
+
+
+def settings_hit(x, y):
+    """Which knob a click landed on, and which way. None if it missed."""
+    for i, (_l, key, step, lo, hi, _u) in enumerate(ROWS):
+        ry = _row_y(i)
+        if not (ry - 2 <= y <= ry + 30):
+            continue
+        if MINUS_X <= x <= MINUS_X + STEP_W:
+            return key, -step, lo, hi
+        if PLUS_X <= x <= PLUS_X + STEP_W:
+            return key, step, lo, hi
+    return None

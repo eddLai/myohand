@@ -31,6 +31,9 @@ auto_sync = False
 last_sent = None
 cal = None                 # {feature: [min, max]} while calibrating
 cal_note = ""
+cal_grew = 0.0             # when the range last got bigger
+CAL_QUIET = 4.0            # save once no new extreme has shown up for this long
+CAL_MAX = 45.0             # and give up waiting after this
 actual = None              # where the hand reported it got to, in target units
 PARK = [2000] * 6          # every joint open - the pose to leave the hand in
 show_settings = False
@@ -87,15 +90,21 @@ def hit(rect, x, y):
     return x0 <= x <= x1 and y0 <= y <= y1
 
 
+def cal_wide_enough(c):
+    span = {k: v[1] - v[0] for k, v in (c or {}).items()}
+    return span.get("curl_hi", 0) >= 40 and span.get("abd", 0) >= 15
+
+
 def toggle_calibration():
     """Start recording the operator's range, or close it out and keep the
-    windows if they actually moved far enough to define one."""
-    global cal, cal_note
+    windows if they actually moved far enough to define one. Calibration
+    also closes itself: both hands are busy demonstrating the range, so
+    asking for a second click is asking for the one thing they cannot do."""
+    global cal, cal_note, cal_grew
     if cal is None:
-        cal, cal_note = {}, "move through your full range"
+        cal, cal_note, cal_grew = {}, "move through your full range", time.time()
         return
-    span = {k: v[1] - v[0] for k, v in cal.items()}
-    if not cal or span.get("curl_hi", 0) < 40 or span.get("abd", 0) < 15:
+    if not cal_wide_enough(cal):
         cal, cal_note = None, "range too small - discarded"
         return
     hm.save_calibration({
@@ -182,15 +191,24 @@ def main():
                 w = SETTINGS["ema"] / 100.0
                 ema = [int(w * e + (1 - w) * r) for e, r in zip(ema, raw)]
             if cal is not None:
+                grew = False
                 for k, v in hm.raw_features(res.multi_hand_world_landmarks[0].landmark).items():
                     lo, hi = cal.get(k, (v, v))
+                    if v < lo - 0.5 or v > hi + 0.5:
+                        grew = True
                     cal[k] = (min(lo, v), max(hi, v))
+                if grew:
+                    cal_grew = time.time()
             moved = max(abs(a - b) for a, b in zip(ema, raw))
             quiet = quiet + 1 if moved < SETTLE_TOL else 0
             tgt = ema[:]
         else:
             quiet = 0
 
+        if cal is not None:
+            idle = time.time() - cal_grew
+            if (idle > CAL_QUIET and cal_wide_enough(cal)) or idle > CAL_MAX:
+                toggle_calibration()          # closes itself once you stop finding new range
         busy = send_lock.locked()
         ui.draw_gauge(frame, tgt, busy, actual)
         ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
@@ -206,8 +224,12 @@ def main():
         if cal is not None:
             n = cal.get("abd", (0, 0))
             headline = "Calibrating"
-            hint = ("open wide, make a fist, tuck and splay the thumb - "
-                    f"thumb spread so far {n[1] - n[0]:.0f} deg")
+            if cal_wide_enough(cal):
+                hint = (f"saving in {max(0.0, CAL_QUIET - (time.time() - cal_grew)):.0f} s - "
+                        "keep going if you have more range to show")
+            else:
+                hint = ("open wide, make a fist, tuck and splay the thumb - "
+                        f"thumb spread so far {n[1] - n[0]:.0f} deg")
             tone = ui.VIOLET
         elif busy:
             headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET

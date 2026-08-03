@@ -33,7 +33,7 @@ cal = None                 # {feature: [min, max]} while calibrating
 cal_note = ""
 cal_grew = 0.0             # when the range last got bigger
 CAL_QUIET = 4.0            # save once no new extreme has shown up for this long
-CAL_MAX = 45.0             # and give up waiting after this
+CAL_NEED = {"curl_hi": 40, "abd": 15}   # the spread a usable window needs
 actual = None              # where the hand reported it got to, in target units
 PARK = [2000] * 6          # every joint open - the pose to leave the hand in
 show_settings = False
@@ -90,9 +90,10 @@ def hit(rect, x, y):
     return x0 <= x <= x1 and y0 <= y <= y1
 
 
-def cal_wide_enough(c):
+def cal_missing(c):
+    """Which criteria the operator has not demonstrated yet."""
     span = {k: v[1] - v[0] for k, v in (c or {}).items()}
-    return span.get("curl_hi", 0) >= 40 and span.get("abd", 0) >= 15
+    return [k for k, need in CAL_NEED.items() if span.get(k, 0) < need]
 
 
 def toggle_calibration():
@@ -104,7 +105,7 @@ def toggle_calibration():
     if cal is None:
         cal, cal_note, cal_grew = {}, "move through your full range", time.time()
         return
-    if not cal_wide_enough(cal):
+    if cal_missing(cal):
         cal, cal_note = None, "range too small - discarded"
         return
     hm.save_calibration({
@@ -205,10 +206,11 @@ def main():
         else:
             quiet = 0
 
-        if cal is not None:
-            idle = time.time() - cal_grew
-            if (idle > CAL_QUIET and cal_wide_enough(cal)) or idle > CAL_MAX:
-                toggle_calibration()          # closes itself once you stop finding new range
+        if cal is not None and not cal_missing(cal):
+            # never time out and discard: the range stays open until the
+            # operator has actually shown it, then settles on its own
+            if time.time() - cal_grew > CAL_QUIET:
+                toggle_calibration()
         busy = send_lock.locked()
         ui.draw_gauge(frame, tgt, busy, actual)
         ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
@@ -222,14 +224,20 @@ def main():
             ui.draw_settings(frame, SETTINGS)
         elapsed = (time.perf_counter() - send_started) if send_started else None
         if cal is not None:
-            n = cal.get("abd", (0, 0))
+            missing = cal_missing(cal)
             headline = "Calibrating"
-            if cal_wide_enough(cal):
+            if not missing:
                 hint = (f"saving in {max(0.0, CAL_QUIET - (time.time() - cal_grew)):.0f} s - "
                         "keep going if you have more range to show")
             else:
-                hint = ("open wide, make a fist, tuck and splay the thumb - "
-                        f"thumb spread so far {n[1] - n[0]:.0f} deg")
+                span = {k: v[1] - v[0] for k, v in cal.items()}
+                need = ["fingers: open wide, then a full fist "
+                        f"({span.get('curl_hi', 0):.0f} of {CAL_NEED['curl_hi']} deg)"
+                        if "curl_hi" in missing else "",
+                        "thumb: tuck it in, then splay it out "
+                        f"({span.get('abd', 0):.0f} of {CAL_NEED['abd']} deg)"
+                        if "abd" in missing else ""]
+                hint = "   ".join(n for n in need if n)
             tone = ui.VIOLET
         elif busy:
             headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET

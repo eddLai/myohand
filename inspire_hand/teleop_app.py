@@ -7,26 +7,42 @@ UI (English):
   Q/ESC - quit
 
 Targets come from joint angles on MediaPipe's world landmarks, so a
-rotated hand still reports the pose it is actually holding. Because one
-pose costs the hand two to three seconds, AUTO waits for the pose to
-settle and sends what the operator meant to hold, not what passed by
-mid-transition.
+rotated hand still reports the pose it is actually holding.
+
+Where those targets go is a choice now, not a constant:
+
+  --sink=daemon    (default) stream into handd at --rate Hz. Continuous
+                   following: the pose is pushed as it changes.
+  --sink=hand_set  one subprocess per pose, the path that predates the
+                   daemon. A pose costs two to three seconds, so the
+                   settle gate turns itself on.
+  --sink=none      dry run. The camera, the mapping and the whole window
+                   work with no hand and no daemon.
+
+The settle gate - wait for five frames within 120 units before sending -
+existed only because a pose was slow. It is --settle-frames now, and
+defaults to off when streaming, because waiting for the operator to hold
+still is the opposite of following them.
 """
-import argparse, json, os, re, subprocess, threading, time
+import argparse, json, os, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import cv2
 import mediapipe as mp
 
+import hand_latency
 import hand_mapping as hm
+import hand_sink
 import teleop_ui as ui
 
-SEND_CMD = ["/home/eddlai/inspire_hand/soem_build/hand_set"]  # lean path ~2-3s
-SETTLE_FRAMES = 5      # consecutive quiet frames before AUTO fires
+# Defaults only. Every one of these is a command-line option now: the
+# settle gate exists because a pose used to cost two to three seconds, and
+# whether that is still true depends on the trigger the daemon is running.
 SETTLE_TOL = 120       # target units counted as "not moving"
-DEADBAND = 250         # ignore poses this close to the last one sent
 
-send_lock = threading.Lock()
-last_result = "hand idle"
-send_started = None
+sink = None                # where poses go; see hand_sink.open_sink
+settle_frames = 5          # 0 disables the gate entirely
 auto_sync = False
 last_sent = None
 cal = None                 # {feature: [min, max]} while calibrating
@@ -34,7 +50,6 @@ cal_note = ""
 cal_grew = 0.0             # when the range last got bigger
 CAL_QUIET = 4.0            # save once no new extreme has shown up for this long
 CAL_NEED = {"curl_hi": 40, "abd": 15}   # the spread a usable window needs
-actual = None              # where the hand reported it got to, in target units
 PARK = [2000] * 6          # every joint open - the pose to leave the hand in
 show_settings = False
 SET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teleop_settings.json")
@@ -44,40 +59,10 @@ try:
 except FileNotFoundError:
     pass
 
-def send_pose(tgt):
-    global last_result, send_started
-    if not send_lock.acquire(blocking=False):
-        return
-    def work():
-        global last_result, send_started
-        try:
-            t0 = send_started = time.perf_counter()
-            r = subprocess.run(SEND_CMD + [str(v) for v in tgt]
-                               + [str(SETTINGS["force"]), str(SETTINGS["speed"])],
-                               capture_output=True, text=True, timeout=40)
-            dt = time.perf_counter() - t0
-            out = (r.stdout + r.stderr).strip().splitlines()
-            guarded = any("guard" in ln for ln in out)
-            read_back(out)
-            last_result = (f"held back a clash  {dt:.1f}s" if guarded
-                           else f"pose reached the hand  {dt:.1f}s")
-        except Exception as e:
-            last_result = "hand did not answer - check its power and the RJ45 link"
-        finally:
-            send_started = None
-            send_lock.release()
-    threading.Thread(target=work, daemon=True).start()
-
-
-def read_back(lines):
-    """hand_set already reports where the joints ended up; keep it instead
-    of throwing the line away, so the gauge can show both readings."""
-    global actual
-    for ln in lines:
-        m = re.search(r"ANG=\[([-\d ]+)\]", ln)
-        if m:
-            actual = [hm.target_from_angle(v) for v in m.group(1).split()]
-            return
+def send_pose(tgt, stamps=None):
+    """Hand the pose to whichever sink is open. The sink decides whether
+    that means a subprocess, a socket write, or nothing at all."""
+    return sink.send(tgt, stamps)
 
 
 def save_settings():
@@ -138,13 +123,56 @@ def on_mouse(event, x, y, flags, param):
                 save_settings()
 
 
-def main():
-    global auto_sync, last_sent, show_settings
-    ap = argparse.ArgumentParser()
+def build_parser():
+    ap = argparse.ArgumentParser(
+        description="RH56F1 teleop. Nothing here is wired to a hand until "
+                    "--sink says so.")
     ap.add_argument("--device", type=int, default=4)
     ap.add_argument("--width", type=int, default=960)
     ap.add_argument("--height", type=int, default=540)
-    args = ap.parse_args()
+    ap.add_argument("--sink", choices=("daemon", "hand_set", "none"),
+                    default="daemon",
+                    help="daemon: stream into handd (continuous following). "
+                         "hand_set: one subprocess per pose, the pre-daemon "
+                         "path. none: dry run, no hand needed.")
+    ap.add_argument("--socket", default=None,
+                    help="handd socket (default $HAND_SOCKET)")
+    ap.add_argument("--rate", type=float, default=50.0,
+                    help="Hz at which the daemon sink pushes targets")
+    ap.add_argument("--deadband", type=int, default=None,
+                    help="target units a pose must move before it is resent; "
+                         "the sink picks a sensible default")
+    ap.add_argument("--settle-frames", type=int, default=None,
+                    help="quiet frames required before AUTO fires. 0 turns "
+                         "the gate off, which is what continuous following "
+                         "means. Default depends on the sink.")
+    ap.add_argument("--settle-tol", type=int, default=SETTLE_TOL,
+                    help="target units still counted as 'not moving'")
+    return ap
+
+
+def main():
+    global auto_sync, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
+    args = build_parser().parse_args()
+
+    SETTLE_TOL = args.settle_tol
+    try:
+        sink = hand_sink.open_sink(
+            args.sink, socket_path=args.socket, rate_hz=args.rate,
+            deadband=args.deadband, force=SETTINGS["force"],
+            speed=SETTINGS["speed"])
+    except Exception as e:                                  # noqa: BLE001
+        # Say which sink failed and offer the one that needs nothing, rather
+        # than falling back silently to a different thing being measured.
+        print(f"could not open the '{args.sink}' sink: {e}\n"
+              f"To work on the vision chain without a hand: --sink=none",
+              file=sys.stderr)
+        return 1
+    settle_frames = (args.settle_frames if args.settle_frames is not None
+                     else hand_sink.settle_frames_default(sink.name))
+    print(f"sink={sink.name}  settle_frames={settle_frames}  "
+          f"deadband={sink.deadband}"
+          + (f"  rate={args.rate:g} Hz" if sink.name == "daemon" else ""))
 
     SETTINGS["device"] = args.device if args.device != 4 else SETTINGS["device"]
     cap = cv2.VideoCapture(SETTINGS["device"])
@@ -164,6 +192,7 @@ def main():
     ema = None
     quiet = 0
     fps_t, fps = time.time(), 0.0
+    stamps = hand_latency.Stamps()
 
     while True:
         if SETTINGS["device"] != opened_device:     # follow the settings plate
@@ -176,6 +205,7 @@ def main():
         if not ok:
             time.sleep(0.05)
             continue
+        stamps.frame()          # the latency ruler starts at the frame
         frame = cv2.flip(frame, 1)
         res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         tgt = None
@@ -203,6 +233,7 @@ def main():
             moved = max(abs(a - b) for a, b in zip(ema, raw))
             quiet = quiet + 1 if moved < SETTLE_TOL else 0
             tgt = ema[:]
+            stamps.mapped()     # targets are ready; the rest is the daemon's
         else:
             quiet = 0
 
@@ -211,8 +242,8 @@ def main():
             # operator has actually shown it, then settles on its own
             if time.time() - cal_grew > CAL_QUIET:
                 toggle_calibration()
-        busy = send_lock.locked()
-        ui.draw_gauge(frame, tgt, busy, actual)
+        busy = sink.busy
+        ui.draw_gauge(frame, tgt, busy, sink.actual)
         ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
                        "SYNC ON" if auto_sync else "SYNC OFF")
         ui.draw_button(frame, ui.CAL_BTN, cal is not None,
@@ -222,7 +253,7 @@ def main():
         ui.draw_button(frame, ui.SET_BTN, show_settings, "SETTINGS", ui.VIOLET)
         if show_settings:
             ui.draw_settings(frame, SETTINGS)
-        elapsed = (time.perf_counter() - send_started) if send_started else None
+        elapsed = sink.elapsed()
         if cal is not None:
             missing = cal_missing(cal)
             headline = "Calibrating"
@@ -243,24 +274,31 @@ def main():
             headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET
         elif tgt is None:
             headline, hint, tone = "Show your hand", "hold it in view of the camera", ui.CREAM
-        elif quiet >= SETTLE_FRAMES:
-            headline, hint, tone = (("Sending", "auto sync is on", ui.AMBER) if auto_sync
-                                    else ("Ready", "press space to send this pose", ui.AMBER))
+        elif quiet >= settle_frames:
+            headline, hint, tone = (
+                ("Following" if settle_frames == 0 else "Sending",
+                 f"streaming to {sink.name}" if settle_frames == 0
+                 else "auto sync is on", ui.AMBER) if auto_sync
+                else ("Ready", "press space to send this pose", ui.AMBER))
         else:
             headline, hint, tone = "Hold still", "the pose sends once it settles", ui.CREAM
         now = time.time()
         fps = 0.9 * fps + 0.1 * (1.0 / max(now - fps_t, 1e-3))
         fps_t = now
-        ui.draw_rail(frame, headline, hint, tone, min(1.0, quiet / SETTLE_FRAMES),
-                     elapsed, cal_note or last_result, fps,
+        progress = 1.0 if settle_frames == 0 else min(1.0, quiet / settle_frames)
+        ui.draw_rail(frame, headline, hint, tone, progress,
+                     elapsed, cal_note or sink.last_result, fps,
                      "space  send      q  quit")
 
-        if (tgt and auto_sync and quiet >= SETTLE_FRAMES
-                and not send_lock.locked()
+        # With the gate off this fires every frame and the sink decides what
+        # is worth sending; with the gate on it waits for stillness, which is
+        # what a two-to-three-second pose demands.
+        if (tgt and auto_sync and quiet >= settle_frames and not sink.busy
                 and (last_sent is None
-                     or max(abs(a - b) for a, b in zip(tgt, last_sent)) > DEADBAND)):
+                     or max(abs(a - b) for a, b in zip(tgt, last_sent))
+                     > sink.deadband)):
             last_sent = tgt[:]
-            send_pose(tgt)
+            send_pose(tgt, stamps)
 
         cv2.imshow(win, frame)
         k = cv2.waitKey(1) & 0xFF
@@ -268,7 +306,7 @@ def main():
             break
         elif k == ord(" ") and tgt:
             last_sent = tgt[:]
-            send_pose(tgt)
+            send_pose(tgt, stamps)
         elif k == ord("a"):
             auto_sync = not auto_sync
         elif k == ord("c"):
@@ -280,7 +318,9 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
+    sink.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -107,6 +107,12 @@ confirming that verdict, not for eyeballing raw numbers.
 - Single axis, ±300 targets (≈ ±144 ANGLEACT counts, ~15% of travel)
   around wherever the axis already is — never a full-range jump. The
   amplitude is fixed in the source, not CLI-controlled.
+- If the axis starts within one amplitude of a travel limit, the swing
+  goes one-way off that limit instead of straddling it: endpoints become
+  `[here, here + 2*AMP]` near closed and `[here - 2*AMP, here]` near
+  open. Without this an axis resting against its stop (fingers idle at
+  ANGLEACT ~896, target ~12) gets commanded to 0 on every low half-cycle,
+  pressing into the stop and heating the actuator for no measurement.
 - Reuses `hs_lock` (exclusive bus access) and `hs_profile` (per-axis
   force/speed limits) from the existing driver layer.
 - Aborts on an axis that is already stalled, rather than relieving it.

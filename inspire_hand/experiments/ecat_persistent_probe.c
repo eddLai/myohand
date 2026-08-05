@@ -218,10 +218,18 @@ int main(int argc, char **argv)
    for (i = 1; i <= 6; i++) out[i] = -1;
    cyc(200);
 
+   /* Both swing endpoints have to sit in free travel. Clamping the centre
+      into [AMP, 2000-AMP] is not enough: an axis parked against a stop
+      (fingers rest at ANGLEACT ~896, i.e. target ~12) would still get
+      commanded to 0 on the low half of the swing, pressing into the stop,
+      drawing current and heating an actuator for no experimental gain.
+      So when the axis starts near a limit, swing one-way off it instead:
+      endpoints become [here, here + 2*AMP] near closed, and
+      [here - 2*AMP, here] near open. */
    ang_start = in[IN_ANG + axis];
    center = hs_ang_to_target(ang_start);
-   if (center < AMP) center = AMP;
-   if (center > 2000 - AMP) center = 2000 - AMP;
+   if (center < AMP)             center = (int16_t)(center + AMP);
+   else if (center > 2000 - AMP) center = (int16_t)(center - AMP);
 
    /* oscillate at 1 kHz - same PDO cadence as every working binary here,
       since cycle rate is entangled with the watchdog we are testing */

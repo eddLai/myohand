@@ -102,6 +102,62 @@ confirming that verdict, not for eyeballing raw numbers.
   `err`, and `cur` columns before concluding anything — this is the
   outcome `hand_op3..6` produced, and the reason this probe exists.
 
+## Result — 2026-08-05, axis 2 (middle), over `eno1`
+
+**`DISCONNECT-GATED`.** Trace: `probe_2026-08-05_eno1_axis2.csv`.
+
+    axis=2 center=525 amp=300 duration_s=10
+    wake=ok after 1ms
+    ang_start=998 ang_preclose=998 max_dANG_open=0 (moved > 30)
+    ang_postclose=896 dANG_postclose=102
+
+Over 10.5 s and ~500 samples with the master holding OPERATIONAL and
+cycling PDOs at 1 kHz, the commanded target alternated 225 ↔ 825 and
+`ANGLEACT` read **998 on every single sample** — deviation exactly 0
+counts. `CUR` was **0 mA throughout**: the actuator was never energised,
+so this is not "commanded and failed to reach", it is "the target was not
+acted on at all". 4.4 s after `ecx_close` the axis had moved to 896.
+
+Two confounds are ruled out by the trace itself:
+
+- **Not standby.** `STA` read 1-2 for the whole run and never 7. This is
+  the ambiguity that makes `hand_op3..6` uninterpretable, and it is the
+  reason this probe logs status per sample. (Caveat: STA=2 is simply not
+  the *documented* standby value; what it does mean is unknown.)
+- **Not a unit mistake.** The axis sat at ANGLEACT 998 = target 225 on
+  the 0..2000 scale. Under that scale the swing to 825 commands *open*;
+  under the alternative reading below it commands *closed*. Either way
+  the target differed from the current position and live execution would
+  have produced motion. It produced none.
+
+So the assumption `hand_ctl` / `hand_set` were built on is **correct**:
+the firmware really does gate execution on the master disconnecting.
+A persistent cyclic-PDO daemon is off the table. Per the branch below,
+the remaining win is to stop paying for a process spawn per pose — keep a
+warm process that only repeats the connect/disconnect inner loop. Note
+the probe's own reconnect reached OPERATIONAL in well under a second, and
+`hand_ctl`'s 12 s wake loop cost nothing here because no axis was in
+STATUS=7, so the achievable floor looks well below the current 2-3 s.
+
+### Still open
+
+- **Rerun on a direct link.** This ran over `eno1` through the switch.
+  The stated criterion says a non-`LIVE` verdict there needs confirming
+  on `enp17s0`. The switch confound pushes *against* this result rather
+  than for it — jitter tripping the SM watchdog would show up as spurious
+  motion or erratic behaviour, not as perfect stillness at 0 mA — but the
+  rerun is still owed.
+- **The target scale may not be 0..2000.** Two observations suggest the
+  target field is an `ANGLEACT`-style setpoint (~890..1850), not the
+  0..2000 scale the whole codebase assumes: `hand_ctl pose … 1000 …`
+  settled the axis at ANGLEACT 998, and a park target of 825 — below the
+  ~890 closed floor — drove it to the closed stop at 896 instead of
+  anywhere near 825. If that holds, `hs_ang_to_target` is a spurious
+  conversion, README's "0=closed, 2000=open" is wrong, and `hand_ctl`'s
+  wake loop feeding raw ANGLEACT as targets was never a unit bug at all.
+  Worth its own probe; it does not affect the result above.
+- One axis, one run, one unit.
+
 ## Safety bounds
 
 - Single axis, ±300 targets (≈ ±144 ANGLEACT counts, ~15% of travel)

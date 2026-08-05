@@ -1,9 +1,14 @@
+from pathlib import Path
+
 from libemg.streamers import myo_streamer
 from libemg.gui import GUI
 from libemg.data_handler import OnlineDataHandler
 
-LABEL_PATH = "data/gestures_set/"
-SAVE_PATH = "data/grandma's_right_hand_emg/"
+# data/ 在 repo 根目錄，所以路徑錨在這個檔案的上一層，從哪個 cwd 跑都一樣
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+LABEL_PATH = f"{DATA_DIR / 'gestures_set'}/"
+SAVE_PATH = "{}/".format(DATA_DIR / "grandma's_right_hand_emg")
 gesture_ids = list(range(1, 38))
 WINDOW_SCALE = 0.5
 

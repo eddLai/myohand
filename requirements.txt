@@ -1,0 +1,21 @@
+# EMG 端（emg/）的相依。inspire_hand/ 有自己的 requirements.txt。
+#
+# 必須用 Python 3.11：libemg 要 numpy<2，而 numpy<2 沒有出 cp313 wheel。
+# 這台 Intel Mac 上已驗證可用的組合寫在下面。
+
+numpy==1.26.4
+pandas
+matplotlib
+
+# llvmlite 0.46 起不再提供 macOS x86_64 wheel，會退回從原始碼編 LLVM 然後失敗。
+# 鏈路是 libemg -> librosa -> numba -> llvmlite。
+llvmlite==0.45.1
+numba==0.62.1
+
+# libemg 從 submodule 安裝，而且不能加 -e：
+#
+#     git submodule update --init
+#     pip install ./libemg
+#
+# 用 -e 的話，從 repo 根目錄執行時 `import libemg` 會解析到 submodule 的外層目錄
+# 變成 namespace package（__file__ is None），凡是用到套件相對路徑的功能都會壞。

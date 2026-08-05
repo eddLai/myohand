@@ -1,1 +1,12 @@
+# 37 個手勢的提示圖，約 127MB，由 libemg 的 gui.download_gestures() 重新下載即可
 data/gestures_set/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# macOS
+.DS_Store

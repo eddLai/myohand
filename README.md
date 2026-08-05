@@ -1,0 +1,53 @@
+# myohand
+
+用前臂 EMG 驅動 Inspire RH56F1 靈巧手。目前 repo 裡是**兩個還沒接起來的半邊**：
+
+| 目錄 | 內容 | 狀態 |
+|---|---|---|
+| `emg/` | Myo 臂環擷取，靠 libemg | 可錄資料，還沒有分類器 |
+| `inspire_hand/` | RH56F1 的 EtherCAT 控制堆疊 | 可動，目前由 webcam 手勢驅動 |
+| `data/` | 已錄好的手勢資料集 | 見下 |
+| `libemg/` | submodule（LibEMG/libemg） | |
+
+EMG 那半邊還沒有任何程式碼會去呼叫 `inspire_hand/`，webcam teleop 也不讀 EMG。
+把兩邊接起來需要一個從 EMG 視窗吐出手勢類別的分類器，那部分還不存在。
+
+## emg/
+
+| 檔案 | 用途 |
+|---|---|
+| `record_gestures.py` | 用 libemg 的錄製 GUI 跑 37 手勢 × 3 reps（每 rep 5 秒、休息 10 秒），寫進 `data/` |
+| `myo_monitor.py` | tkinter 診斷面板：即時看 8 通道 EMG 與 IMU，可切 raw/filtered、震動、斷線 |
+| `inspect_recording.py` | `#%%` cell 形式，把單一 CSV 讀成 DataFrame 來看 |
+
+路徑都錨在 repo 根目錄，所以從哪個 cwd 執行都可以。
+
+### 環境
+
+需要 Python 3.11（`numpy<2` 沒有 cp313 wheel）：
+
+    conda create -n myo python=3.11
+    conda activate myo
+    pip install -r requirements.txt
+    git submodule update --init
+    pip install ./libemg          # 不要加 -e，理由見 requirements.txt
+
+BLED112 dongle 會被 `Myo.detect_tty()` 自動找到（比對 `PID=2458:0*1`），不用設 port；
+臂環自己的 micro-USB 只能充電。第一次連線可能要掃約 2000 個封包，之後很快。
+
+**地雷**：`myo_monitor.py:57` 的 `myo.bt.ser.timeout = 0.001` 會讓任何等 ack 的指令
+（`vibrate()`、`disconnect()`）以 `AttributeError: 'NoneType' object has no attribute 'typ'`
+炸掉，因為 `recv_packet()` 逾時回傳 None。這個 timeout 要在那些呼叫**之後**才設，或是自己包 guard。
+
+## data/
+
+`gestures_set/` 是 37 張手勢提示圖（約 127MB），已被 gitignore，
+`gui.download_gestures()` 會重新下載。
+
+錄製結果（`grandma's_left_hand_emg/`、`grandma's_right_hand_emg/`）是 libemg 的
+`C_<class>_R_<rep>_emg.csv` 格式，class 對應表在同目錄的 `collection_details.json`。
+
+## inspire_hand/
+
+有自己的 README、Makefile 和 requirements.txt，見 [`inspire_hand/README.md`](inspire_hand/README.md)。
+協定逆向的完整紀錄在 ExoPulse_docs vault 的 `Inspire_RH56F1_Hand_Bringup_Ops_Log`。

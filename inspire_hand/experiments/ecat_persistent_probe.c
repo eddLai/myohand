@@ -19,8 +19,14 @@
  * printing inside the PDO loop can stall a cycle past the SM watchdog,
  * which is the very mechanism under test.
  *
- * Usage: ecat_persistent_probe <iface> [axis 0-5] [duration_s]
+ * Usage: ecat_persistent_probe <iface> [axis 0-5] [duration_s] [dc_cycle_us]
  *   axis: 0=pinky 1=ring 2=middle(default) 3=index 4=thumb_bend 5=thumb_rot
+ *   dc_cycle_us: 0 (default) leaves distributed clocks off, exactly as the
+ *     2026-08-05 run had them. Non-zero calls ecx_configdc() and arms Sync0
+ *     at that period. An SSC application commonly copies PDO outputs only
+ *     inside the Sync0 interrupt; if this one does, never starting DC means
+ *     the data sits in the output buffer unread and the "disconnect-gated"
+ *     result is our omission rather than the firmware's design.
  * Plan, result and rerun instructions live in the ExoPulse_docs vault:
  * Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/
  * Persistent_OP_Probe.md. Raw trace of the 2026-08-05 run is next to this
@@ -54,6 +60,12 @@
 static ecx_contextt ctx;
 static uint8 IOmap[4096];
 static int16_t *out, *in;
+
+static int dc_us;          /* Sync0 period in us; 0 = leave DC off */
+static int dc_hasdc;       /* slave advertises DC support */
+static int dc_configured;  /* ecx_configdc() found a DC-capable slave */
+static int dc_active;      /* slave's DCactive after arming Sync0 */
+static int32_t dc_pdelay;
 
 typedef struct { long t; int16_t tgt, ang, pos, sta, cur, err; } sample_t;
 static sample_t samples[MAX_SAMPLES];
@@ -114,6 +126,20 @@ static int bringup(const char *iface)
    memset(out, 0, ctx.slavelist[1].Obytes);
    for (i = 1; i <= 6; i++) out[i] = -1;
 
+   /* hasdc comes from config_init; configdc then measures propagation
+      delay and sets the system-time offsets. Sync0 is armed before the
+      OP request so the slave is already generating the interrupt by the
+      time it starts consuming process data. */
+   dc_hasdc = ctx.slavelist[1].hasdc;
+   dc_configured = ecx_configdc(&ctx) ? 1 : 0;
+   if (dc_us > 0)
+   {
+      if (!dc_hasdc) return 5;
+      ecx_dcsync0(&ctx, 1, TRUE, (uint32_t)dc_us * 1000u, 0);
+   }
+   dc_active = ctx.slavelist[1].DCactive;
+   dc_pdelay = ctx.slavelist[1].pdelay;
+
    ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
    ctx.slavelist[0].state = EC_STATE_OPERATIONAL;
    pd();
@@ -134,6 +160,8 @@ static const char *bringup_err(int rc)
       case 2: return "no EtherCAT slave (check link/power/iface)";
       case 3: return "slave refused OPERATIONAL";
       case 4: return "PDO map smaller than the RH56F1 layout expects";
+      case 5: return "DC requested but the slave does not support it "
+                     "(hasdc=0) - the Sync0 theory is dead, nothing moved";
    }
    return "unknown";
 }
@@ -183,11 +211,15 @@ int main(int argc, char **argv)
 
    if (argc < 2)
    {
-      printf("usage: ecat_persistent_probe <iface> [axis 0-5] [duration_s]\n");
+      printf("usage: ecat_persistent_probe <iface> [axis 0-5] [duration_s]"
+             " [dc_cycle_us]\n");
       return 1;
    }
    if (argc > 2) axis = atoi(argv[2]);
    if (argc > 3) duration_s = atoi(argv[3]);
+   if (argc > 4) dc_us = atoi(argv[4]);
+   if (dc_us < 0 || dc_us > 100000)
+   { printf("dc_cycle_us must be 0 (off) or 1..100000\n"); return 1; }
    if (axis < 0 || axis > 5) { printf("axis must be 0-5\n"); return 1; }
    if (duration_s < 1 || duration_s > MAX_DURATION)
    { printf("duration_s must be 1..%d\n", MAX_DURATION); return 1; }
@@ -310,6 +342,8 @@ int main(int argc, char **argv)
    /* everything below runs with the link already down */
    printf("axis=%d center=%d amp=%d duration_s=%d\n",
           axis, center, AMP, duration_s);
+   printf("dc: requested=%dus hasdc=%d configdc=%d DCactive=%d pdelay=%d\n",
+          dc_us, dc_hasdc, dc_configured, dc_active, dc_pdelay);
    printf("wake=%s after %dms\n", wake_ok ? "ok" : "FAILED (axes still STA=7)",
           wake_ms);
    if (why[0]) printf("interlock: %s\n", why);

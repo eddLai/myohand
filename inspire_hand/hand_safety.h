@@ -37,8 +37,39 @@ void hs_unlock(int fd);
 #endif
 const char *hs_iface(void);
 
-/* ANGLEACT (~890 closed .. ~1850 open) mapped onto the 0..2000 target scale. */
+/* ---- the target scale, defined in exactly one place -----------------
+ *
+ * UNRESOLVED (2026-08-06): the command field may not be a 0..2000 scale
+ * at all. Two observations point at it being an ANGLEACT-style setpoint
+ * (~890..1850) instead: `hand_ctl pose ... 1000 ...` leaves the axis at
+ * ANGLEACT 998, and a park target of 825 - below the ~890 closed end -
+ * drove the axis to the closed stop at 896 rather than to 825. Settling
+ * it needs the hand, so it stays open.
+ *
+ * Everything that converts between ANGLEACT and a target therefore goes
+ * through the four calls below, and nothing else in the tree divides by
+ * the span or clamps against a literal 0/2000. If the scale turns out to
+ * be 890..1850, the edit is HS_TGT_MIN/HS_TGT_MAX plus the body of
+ * hs_ang_to_target here, and every caller follows without being touched.
+ * Python has one mirror of this, hand_scale.py, which cross-checks
+ * itself against `hand_ctl scale` rather than restating the numbers.
+ */
+#define HS_TGT_MIN   0
+#define HS_TGT_MAX   2000
+#define HS_TGT_HOLD  (-1)   /* leave the axis wherever it currently is */
+
+/* Clamp into range; HS_TGT_HOLD passes through as itself. */
+int16_t hs_clamp_target(int16_t tgt);
+/* Whether a caller-supplied value is a legal command at all. */
+int     hs_target_valid(int16_t tgt);
+/* ANGLEACT (~890 closed .. ~1850 open) onto the target scale, and back.
+   hs_target_to_ang(HS_TGT_HOLD) returns HS_TGT_HOLD: a hold names no
+   angle, and inventing one would silently turn it into a move. */
 int16_t hs_ang_to_target(int16_t ang);
+int16_t hs_target_to_ang(int16_t tgt);
+/* The scale as JSON, so a client can verify its own copy instead of
+   trusting that the two were edited together. Returns bytes written. */
+int     hs_scale_json(char *buf, size_t n);
 
 /* Clamp targets against mechanical interference. Returns the number of
    axes adjusted and appends a human-readable note to why[]. */

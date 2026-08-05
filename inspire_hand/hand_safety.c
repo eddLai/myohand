@@ -14,6 +14,10 @@
 #define ANG_CLOSED 890
 #define ANG_OPEN   1850
 
+/* The four thresholds below are positions on the target scale, read off
+   the hand at the time. They are not derived from HS_TGT_MIN/MAX, so if
+   the scale question (see hand_safety.h) resolves the other way they have
+   to be re-measured, not rescaled by arithmetic. */
 /* index and thumb-bend below this together drive the thumb into the
    index mechanism (observed on-site: STA=5 current-protection stop) */
 #define CLEAR_IDX_THUMB 600
@@ -67,24 +71,52 @@ void hs_unlock(int fd)
    if (fd >= 0) { flock(fd, LOCK_UN); close(fd); }
 }
 
+int16_t hs_clamp_target(int16_t tgt)
+{
+   if (tgt == HS_TGT_HOLD) return HS_TGT_HOLD;
+   return (int16_t)clampi(tgt, HS_TGT_MIN, HS_TGT_MAX);
+}
+
+int hs_target_valid(int16_t tgt)
+{
+   return tgt == HS_TGT_HOLD || (tgt >= HS_TGT_MIN && tgt <= HS_TGT_MAX);
+}
+
 int16_t hs_ang_to_target(int16_t ang)
 {
-   int t = ((int)ang - ANG_CLOSED) * 2000 / (ANG_OPEN - ANG_CLOSED);
-   return (int16_t)clampi(t, 0, 2000);
+   int t = HS_TGT_MIN + ((int)ang - ANG_CLOSED) * (HS_TGT_MAX - HS_TGT_MIN)
+                        / (ANG_OPEN - ANG_CLOSED);
+   return (int16_t)clampi(t, HS_TGT_MIN, HS_TGT_MAX);
+}
+
+int16_t hs_target_to_ang(int16_t tgt)
+{
+   int a;
+   if (tgt == HS_TGT_HOLD) return HS_TGT_HOLD;   /* no angle to name */
+   a = ANG_CLOSED + ((int)hs_clamp_target(tgt) - HS_TGT_MIN)
+                        * (ANG_OPEN - ANG_CLOSED) / (HS_TGT_MAX - HS_TGT_MIN);
+   return (int16_t)clampi(a, ANG_CLOSED, ANG_OPEN);
+}
+
+int hs_scale_json(char *buf, size_t n)
+{
+   return snprintf(buf, n,
+                   "{\"target_min\":%d,\"target_max\":%d,\"target_hold\":%d,"
+                   "\"ang_closed\":%d,\"ang_open\":%d}",
+                   HS_TGT_MIN, HS_TGT_MAX, HS_TGT_HOLD, ANG_CLOSED, ANG_OPEN);
 }
 
 /* effective value of an axis: the command if given, else where it sits now */
 static int eff_of(const int16_t *tgt, const int16_t *ang, int i)
 {
-   return tgt[i] != -1 ? tgt[i] : hs_ang_to_target(ang[i]);
+   return tgt[i] != HS_TGT_HOLD ? tgt[i] : hs_ang_to_target(ang[i]);
 }
 
 int hs_interlock(int16_t *tgt, const int16_t *ang, char *why, size_t n)
 {
    int fixed = 0, i, idx, thb, rot;
 
-   for (i = 0; i < 6; i++)
-      if (tgt[i] != -1) tgt[i] = (int16_t)clampi(tgt[i], 0, 2000);
+   for (i = 0; i < 6; i++) tgt[i] = hs_clamp_target(tgt[i]);
 
    /* thumb yields to the fingers, matching the fingers-first doctrine */
    idx = eff_of(tgt, ang, AX_INDEX);
@@ -120,7 +152,7 @@ int hs_stall_relief(int16_t *tgt, const int16_t *cur, const int16_t *sta,
       here = hs_ang_to_target(ang[i]);
       want = eff_of(tgt, ang, i);
       if (want >= here + RELIEF) continue;   /* already moving clear */
-      tgt[i] = (int16_t)clampi(here + RELIEF, 0, 2000);
+      tgt[i] = hs_clamp_target((int16_t)(here + RELIEF));
       note(why, n, "axis %d relieved to %d (sta=%d cur=%dmA)",
            i, tgt[i], sta[i], cur[i]);
       relieved++;

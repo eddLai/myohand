@@ -276,8 +276,8 @@ int main(int argc, char **argv)
       [here - 2*AMP, here] near open. */
    ang_start = in[IN_ANG + axis];
    center = hs_ang_to_target(ang_start);
-   if (center < AMP)             center = (int16_t)(center + AMP);
-   else if (center > 2000 - AMP) center = (int16_t)(center - AMP);
+   if (center < HS_TGT_MIN + AMP)      center = (int16_t)(center + AMP);
+   else if (center > HS_TGT_MAX - AMP) center = (int16_t)(center - AMP);
 
    /* oscillate at 1 kHz - same PDO cadence as every working binary here,
       since cycle rate is entangled with the watchdog we are testing */

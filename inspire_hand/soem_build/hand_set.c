@@ -28,7 +28,10 @@ int main(int argc, char **argv)
       printf("usage: hand_set p r m i tb tr [force] [speed]  (0-2000, -1=hold)\n");
       return 1;
    }
-   for (i = 0; i < 6; i++) tgt[i] = (int16_t)atoi(argv[i + 1]);
+   /* clamp rather than reject: hand_set is the streaming path, and a
+      caller that overshoots the scale should get the nearest legal pose,
+      not a dead frame. hs_clamp_target leaves -1 (hold) alone. */
+   for (i = 0; i < 6; i++) tgt[i] = hs_clamp_target((int16_t)atoi(argv[i + 1]));
    if (argc > 7) force = atoi(argv[7]);
    if (argc > 8) speed = atoi(argv[8]);
    if (force < 0) force = 0; if (force > 1000) force = 1000;
@@ -55,7 +58,7 @@ int main(int argc, char **argv)
    memset(out, 0, ctx.slavelist[1].Obytes);
    out[0] = 1;
    hs_profile(out, force, speed);   /* shared per-axis force/speed profile */
-   for (i = 1; i <= 6; i++)   out[i] = -1;
+   for (i = 1; i <= 6; i++)   out[i] = HS_TGT_HOLD;
    for (t = 0; t < 200; t++) { pd(); osal_usleep(1000); }
 
    need_wake = 0;

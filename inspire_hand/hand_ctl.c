@@ -2,8 +2,10 @@
  *
  * Usage:
  *   hand_ctl state
+ *   hand_ctl scale                          what the target numbers mean
  *   hand_ctl pose P R M I TB TR [force] [speed]
  *       targets 0..2000 (0=closed, 2000=open), -1 = leave axis unchanged
+ *       the scale itself is defined once, in hand_safety.h
  *   $ECAT_IFACE selects the NIC (default eth0). Confirm with ecat_scan
  *   before assuming - the hand has answered on a different interface on
  *   every host that has driven it.
@@ -55,13 +57,24 @@ static void fail(const char *msg)
 int main(int argc, char **argv)
 {
    int16_t *out, *in;
-   int16_t tgt[6] = {-1, -1, -1, -1, -1, -1};
+   int16_t tgt[6] = {HS_TGT_HOLD, HS_TGT_HOLD, HS_TGT_HOLD,
+                     HS_TGT_HOLD, HS_TGT_HOLD, HS_TGT_HOLD};
    int force = 500, speed = 800;
    int do_pose = 0, i, chk, t, lock_fd, guarded = 0;
    const char *iface;
    char why[256] = {0};
 
-   if (argc < 2) fail("usage: hand_ctl state | pose P R M I TB TR [force] [speed]");
+   if (argc < 2) fail("usage: hand_ctl state | scale | pose P R M I TB TR [force] [speed]");
+   /* `scale` answers what the target numbers mean and touches no bus, so
+      a Python client can check its own copy of the scale against the C
+      one instead of the two drifting apart unnoticed. */
+   if (!strcmp(argv[1], "scale"))
+   {
+      char js[160];
+      hs_scale_json(js, sizeof js);
+      printf("{\"ok\":true,\"scale\":%s}\n", js);
+      return 0;
+   }
    if (!strcmp(argv[1], "pose"))
    {
       if (argc < 8) fail("pose needs 6 targets");
@@ -69,7 +82,8 @@ int main(int argc, char **argv)
       for (i = 0; i < 6; i++)
       {
          long v = strtol(argv[2 + i], NULL, 10);
-         if (v != -1 && (v < 0 || v > 2000)) fail("target out of range (0..2000 or -1)");
+         if (v < -32768 || v > 32767 || !hs_target_valid((int16_t)v))
+            fail("target out of range (see `hand_ctl scale`; -1 holds)");
          tgt[i] = (int16_t)v;
       }
       if (argc > 8) force = atoi(argv[8]);
@@ -103,7 +117,7 @@ int main(int argc, char **argv)
    /* neutral frame: enable + no-change targets (never leave zeros: 0=fist!) */
    memset(out, 0, ctx.slavelist[1].Obytes);
    out[0] = 1;
-   for (i = 1; i <= 6; i++)  out[i] = -1;
+   for (i = 1; i <= 6; i++)  out[i] = HS_TGT_HOLD;
    hs_profile(out, force, speed);
    for (t = 0; t < 300; t++) { pd(); osal_usleep(1000); }
 

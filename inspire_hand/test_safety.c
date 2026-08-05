@@ -78,6 +78,27 @@ int main(void)
       check("healthy hand: no relief",
             hs_stall_relief(t, no_cur, ok_sta, ang_open, why, sizeof why) == 0);
    }
+   {  /* the scale conversions all callers share (see hand_safety.h) */
+      char js[160];
+      check("closed and open ANGLEACT hit the ends of the scale",
+            hs_ang_to_target(890) == HS_TGT_MIN &&
+            hs_ang_to_target(1850) == HS_TGT_MAX);
+      check("target round-trips through ANGLEACT within a step",
+            hs_ang_to_target(hs_target_to_ang(1000)) >= 997 &&
+            hs_ang_to_target(hs_target_to_ang(1000)) <= 1003);
+      check("a hold survives clamping and conversion",
+            hs_clamp_target(HS_TGT_HOLD) == HS_TGT_HOLD &&
+            hs_target_to_ang(HS_TGT_HOLD) == HS_TGT_HOLD &&
+            hs_target_valid(HS_TGT_HOLD));
+      check("overshoot clamps, out-of-range values are refused",
+            hs_clamp_target(30000) == HS_TGT_MAX &&
+            hs_clamp_target(-500) == HS_TGT_MIN &&
+            !hs_target_valid((int16_t)(HS_TGT_MAX + 1)));
+      hs_scale_json(js, sizeof js);
+      check("the scale reports itself for clients to check against",
+            strstr(js, "\"target_max\":2000") != NULL &&
+            strstr(js, "\"ang_open\":1850") != NULL);
+   }
    {  /* thumb-bend gets the force headroom its phantom reading demands */
       int16_t out[19];
       memset(out, 0, sizeof out);

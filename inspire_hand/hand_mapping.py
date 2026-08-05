@@ -15,6 +15,8 @@ import json
 import math
 import os
 
+import hand_scale
+
 # landmark ids: wrist 0, thumb 1-4, index 5-8, middle 9-12, ring 13-16, pinky 17-20
 FINGER_CHAINS = {          # (mcp, pip, dip, tip)
     "pinky":  (17, 18, 19, 20),
@@ -28,16 +30,15 @@ CURL_OPEN, CURL_CLOSED = 15.0, 150.0     # total curl in degrees
 THUMB_OPEN, THUMB_CLOSED = 15.0, 110.0
 ABD_MIN, ABD_MAX = 10.0, 50.0            # thumb abduction from the palm plane; see calibrate.py
 
-T_MIN, T_MAX = 300, 2000                 # robot targets; never command a full crush
+# Robot targets. T_MAX is the top of the scale; T_MIN sits above its
+# bottom on purpose - a teleop source should never command a full crush.
+T_MIN, T_MAX = 300, hand_scale.TARGET_MAX
 ROT_MIN = 700
 
-ANG_CLOSED, ANG_OPEN = 890, 1850         # ANGLEACT span measured on this unit
-
-
-def target_from_angle(ang):
-    """Where a joint actually sits, on the same scale the targets use."""
-    span = (int(ang) - ANG_CLOSED) * 2000 / (ANG_OPEN - ANG_CLOSED)
-    return max(0, min(2000, int(span)))
+# The scale itself lives in hand_scale (mirroring hand_safety.h). Nothing
+# here recomputes it, so the open question about whether targets really
+# run 0..2000 is answered in one file.
+target_from_angle = hand_scale.ang_to_target
 
 
 CAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")

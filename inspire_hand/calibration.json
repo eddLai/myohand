@@ -1,0 +1,15 @@
+{
+  "active": "operator-2026-08-02",
+  "profiles": {
+    "operator-2026-08-02": {
+      "note": "245 measured frames, windows taken as the p2/p98 of the range the operator actually showed. Saturation fell from 47% to 4%. Only the thumb windows were measured; CURL_OPEN and CURL_CLOSED are deliberately absent so the module defaults stand. Choosing the metric mattered as much as the numbers: the first attempt maximised how much of the travel was reachable (94%, which looked excellent) and that hid the real problem - saturation is what tells you the operator's hand is moving and the robot's is not.",
+      "measured": "2026-08-02",
+      "windows": {
+        "THUMB_OPEN": 24.0,
+        "THUMB_CLOSED": 80.0,
+        "ABD_MIN": 10.0,
+        "ABD_MAX": 30.0
+      }
+    }
+  }
+}

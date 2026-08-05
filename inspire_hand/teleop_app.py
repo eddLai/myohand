@@ -93,7 +93,10 @@ def toggle_calibration():
     if cal_missing(cal):
         cal, cal_note = None, "range too small - discarded"
         return
-    hm.save_calibration({
+    # A new profile every time. The measured windows already in the file
+    # are data, not settings, and a stray click on a badly lit day must
+    # not be able to land on top of them.
+    name = hm.save_calibration({
         "CURL_OPEN": round(cal["curl_lo"][0], 1),
         "CURL_CLOSED": round(cal["curl_hi"][1], 1),
         "THUMB_OPEN": round(cal["thumb"][0], 1),
@@ -101,7 +104,7 @@ def toggle_calibration():
         "ABD_MIN": round(cal["abd"][0], 1),
         "ABD_MAX": round(cal["abd"][1], 1),
     })
-    cal, cal_note = None, "calibrated and saved"
+    cal, cal_note = None, f"saved as profile {name}"
 
 
 def on_mouse(event, x, y, flags, param):
@@ -148,6 +151,9 @@ def build_parser():
                          "means. Default depends on the sink.")
     ap.add_argument("--settle-tol", type=int, default=SETTLE_TOL,
                     help="target units still counted as 'not moving'")
+    ap.add_argument("--profile", default=None,
+                    help="calibration profile to use; default is the active "
+                         "one (python3 hand_mapping.py lists them)")
     return ap
 
 
@@ -156,6 +162,13 @@ def main():
     args = build_parser().parse_args()
 
     SETTLE_TOL = args.settle_tol
+    if args.profile:
+        if hm.load_calibration(args.profile) is None:
+            print(f"no calibration profile '{args.profile}' - "
+                  f"run `python3 hand_mapping.py` to see what there is",
+                  file=sys.stderr)
+            return 1
+    print(f"calibration profile: {hm.ACTIVE_PROFILE or '(module defaults)'}")
     try:
         sink = hand_sink.open_sink(
             args.sink, socket_path=args.socket, rate_hz=args.rate,

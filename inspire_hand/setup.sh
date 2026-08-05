@@ -1,12 +1,33 @@
 #!/usr/bin/env bash
 # One-shot environment setup for the inspire_hand control stack.
-# Rebuilds everything a clean clone needs: venv + pinned pip deps,
-# vendored SOEM clone + cmake build, C binaries, raw-socket caps.
+# Rebuilds everything a clean clone needs: venv + pip deps, vendored SOEM
+# clone + cmake build, C binaries, raw-socket caps.
 # Usage: ./setup.sh          (cap step asks for sudo once)
+#
+# ⚠️ DO NOT RUN THIS ON THE KD240.
+#
+# Step 1 installs the vision dependencies, and the board has 1.9 GB of RAM
+# with no swap. Any mediapipe without an aarch64 wheel makes pip build from
+# source, which OOMs the board; that is what killed the 2026-08-05 attempt
+# with mediapipe==0.10.21 pinned. requirements.txt now asks for a range
+# that has an aarch64 wheel, but pip resolving a whole vision stack on that
+# machine is still not worth the risk when the board already has a working
+# venv at ~/rh56f1_kd240/ethercat/myohand/inspire_hand/venv.
+#
+# On the board, build the C side only:
+#   export PATH="$HOME/rh56f1_kd240/ethercat/buildenv/bin:$PATH"  # cmake>=3.28
+#   make all && make cap
 set -euo pipefail
 cd "$(dirname "$0")"
 
-echo "[1/5] python venv + pinned deps"
+if [ -z "${SETUP_FORCE:-}" ] && [ "$(uname -m)" = "aarch64" ]; then
+    echo "Refusing to run on aarch64 - see the header of this file." >&2
+    echo "The C side is just: make all && make cap" >&2
+    echo "Override with SETUP_FORCE=1 if you really mean it." >&2
+    exit 1
+fi
+
+echo "[1/5] python venv + vision deps"
 test -d venv || python3 -m venv venv
 venv/bin/pip install -q -r requirements.txt
 

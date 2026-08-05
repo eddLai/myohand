@@ -14,6 +14,7 @@ targets from any viewpoint.
 import json
 import math
 import os
+import time
 
 import hand_scale
 
@@ -43,6 +44,10 @@ target_from_angle = hand_scale.ang_to_target
 
 CAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
 
+#: which window names a profile is allowed to set
+WINDOW_KEYS = ("CURL_OPEN", "CURL_CLOSED", "THUMB_OPEN", "THUMB_CLOSED",
+               "ABD_MIN", "ABD_MAX")
+
 
 def raw_features(lm):
     """The angles the windows above are calibrated against."""
@@ -52,21 +57,89 @@ def raw_features(lm):
             "abd": thumb_abduction(lm)}
 
 
-def load_calibration(path=CAL_PATH):
-    """Prefer windows measured from a real hand over the defaults."""
+# ---- calibration profiles ------------------------------------------------
+#
+# Calibration windows are measured data, not settings. The file used to be
+# one flat set of numbers, which meant the CALIBRATE button overwrote it -
+# and the numbers in it came from 245 measured frames, so a stray click on
+# a badly lit day cost real work.
+#
+# So the file holds named profiles and one `active` pointer. Saving never
+# overwrites an existing name: a new calibration lands under a new name
+# and becomes active, leaving the old one to go back to.
+
+
+def _empty_file():
+    return {"active": None, "profiles": {}}
+
+
+def _read_file(path):
     try:
         with open(path) as f:
             data = json.load(f)
-    except FileNotFoundError:
+    except (FileNotFoundError, ValueError):
+        return _empty_file()
+    if "profiles" in data:
+        return data
+    # the old flat format: keep it, under a name, rather than dropping it
+    windows = {k: v for k, v in data.items() if k in WINDOW_KEYS}
+    if not windows:
+        return _empty_file()
+    return {"active": "legacy",
+            "profiles": {"legacy": {
+                "note": "migrated from the old single-set calibration.json",
+                "windows": windows}}}
+
+
+def list_profiles(path=CAL_PATH):
+    data = _read_file(path)
+    return data["active"], data["profiles"]
+
+
+def load_calibration(name=None, path=CAL_PATH):
+    """Apply a profile's windows. Defaults to the active one.
+
+    Returns the windows applied, or None when there is nothing to apply -
+    the module defaults then stand, which is what a fresh clone gets.
+    """
+    data = _read_file(path)
+    name = name or data.get("active")
+    profile = data["profiles"].get(name) if name else None
+    if not profile:
         return None
-    globals().update({k: v for k, v in data.items() if k in globals()})
-    return data
+    windows = {k: v for k, v in profile.get("windows", {}).items()
+               if k in WINDOW_KEYS}
+    globals().update(windows)
+    globals()["ACTIVE_PROFILE"] = name
+    return windows
 
 
-def save_calibration(data, path=CAL_PATH):
+def save_calibration(windows, name=None, note="", path=CAL_PATH,
+                     overwrite=False):
+    """Store a freshly measured set of windows under its own name.
+
+    Generates a timestamped name when none is given, so the button in
+    teleop cannot land on top of an existing profile by accident.
+    """
+    data = _read_file(path)
+    windows = {k: v for k, v in windows.items() if k in WINDOW_KEYS}
+    name = name or time.strftime("session-%Y%m%d-%H%M%S")
+    if name in data["profiles"] and not overwrite:
+        raise ValueError(
+            f"profile '{name}' already exists - pick another name, or pass "
+            f"overwrite=True if you really mean to replace measured data")
+    data["profiles"][name] = {
+        "note": note or "captured from the teleop CALIBRATE button",
+        "measured": time.strftime("%Y-%m-%d"),
+        "windows": windows,
+    }
+    data["active"] = name
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
-    globals().update({k: v for k, v in data.items() if k in globals()})
+        f.write("\n")
+    globals().update(windows)
+    globals()["ACTIVE_PROFILE"] = name
+    return name
 
 
 def _sub(a, b):
@@ -159,4 +232,17 @@ def pose_legacy(lm):
     return tgt
 
 
+ACTIVE_PROFILE = None
 load_calibration()
+
+
+if __name__ == "__main__":
+    active, profiles = list_profiles()
+    if not profiles:
+        print(f"no profiles in {CAL_PATH}; the module defaults are in use")
+    for name, p in profiles.items():
+        mark = "*" if name == active else " "
+        print(f"{mark} {name:28s} {p.get('measured', '?'):12s} {p.get('note', '')}")
+        for k, v in p.get("windows", {}).items():
+            print(f"    {k:14s} {v}")
+    print("\n* = active. Keys a profile does not set keep the module default.")

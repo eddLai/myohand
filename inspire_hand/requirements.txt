@@ -1,5 +1,13 @@
-mediapipe==0.10.21
-opencv-python==4.10.0.84
+# Vision-side dependencies for the teleop app. The control stack (hand_ctl,
+# hand_set, handd) is C and needs none of this.
+#
+# mediapipe is a range, not a pin: PyPI's newest aarch64 wheel is 0.10.18,
+# and the KD240 is aarch64. Pinning 0.10.21 meant the board tried to build
+# from source and died on 1.9 GB of RAM with no swap. 0.10.18 was measured
+# on the board (35.8 ms tracking, 27.9 FPS with four threads) and the
+# mapping is checked against it by test_mapping.py.
+mediapipe>=0.10.18,<0.11
+opencv-python>=4.10,<5
 numpy<2
 pysoem
 cmake

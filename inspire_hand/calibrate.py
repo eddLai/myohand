@@ -5,7 +5,10 @@ guess. Run it, move through the full motion, read the suggested lines.
 
     python3 calibrate.py [device] [seconds]
 """
-import sys, time
+import os, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import cv2
 import mediapipe as mp
 
@@ -53,7 +56,7 @@ win = {"CURL_OPEN": round(min(c), 1),
        "CURL_CLOSED": round(max(seen["finger curl (max)"]), 1),
        "THUMB_OPEN": round(min(t), 1), "THUMB_CLOSED": round(max(t), 1),
        "ABD_MIN": round(min(a), 1), "ABD_MAX": round(max(a), 1)}
-hm.save_calibration(win)
-print(f"\nsaved to {hm.CAL_PATH}:")
+name = hm.save_calibration(win, note=f"calibrate.py, {secs:.0f}s of a real hand")
+print(f"\nsaved to {hm.CAL_PATH} as profile '{name}':")
 for k, v in win.items():
     print(f"  {k} = {v}")

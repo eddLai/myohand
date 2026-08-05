@@ -228,7 +228,20 @@ int main(int argc, char **argv)
    if (lock_fd < 0) { printf("bus busy: another master holds the hand\n"); return 3; }
 
    rc = bringup(argv[1]);
-   if (rc) { printf("%s\n", bringup_err(rc)); hs_unlock(lock_fd); return 2; }
+   if (rc)
+   {
+      /* AL status code is the only thing that says WHY a slave refused a
+         state, and it is the whole answer when DC is in play (0x002D/
+         0x0030..0x0036 are the DC/sync complaints). */
+      printf("%s\n", bringup_err(rc));
+      printf("  state=0x%02x AL=0x%04x  dc: requested=%dus hasdc=%d "
+             "configdc=%d DCactive=%d pdelay=%d\n",
+             ctx.slavelist[1].state, ctx.slavelist[1].ALstatuscode,
+             dc_us, dc_hasdc, dc_configured, dc_active, dc_pdelay);
+      ecx_close(&ctx);
+      hs_unlock(lock_fd);
+      return 2;
+   }
 
    /* neutral frame: enable + no-change targets, gentle profile */
    out[0] = 1;

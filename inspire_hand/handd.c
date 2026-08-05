@@ -31,13 +31,15 @@
  *
  * Usage:
  *   handd [--iface=NAME] [--trigger=disconnect|sync0] [--socket=PATH]
- *         [--rate-hz=N] [--dc-cycle-us=N] [--force=N] [--speed=N]
- *         [--hold-ms=N] [--settle-ms=N] [--simulate]
+ *         [--rate-hz=N] [--dc-cycle-us=N] [--dc-shift-us=N] [--force=N]
+ *         [--speed=N] [--hold-ms=N] [--settle-ms=N] [--simulate]
  *
  * Protocol: one text command per line on the unix socket, one JSON line
  * back. `hello` describes the daemon, `scale` reports what the target
  * numbers mean, `target P R M I TB TR` commands a pose, `state` reads
- * telemetry, `bye` disconnects. See hand_client.py for the client side.
+ * telemetry, `dc` reports the distributed-clock health and reads the AL
+ * status code aloud, `bye` disconnects. See hand_client.py for the client
+ * side.
  *
  * Exits nonzero with a readable reason if the bus is not there. It never
  * moves the hand on shutdown: an unattended park would be a surprise
@@ -84,11 +86,12 @@ static struct {
    const char *trigger_name;
    int rate_hz;
    int dc_cycle_us;      /* 0 = follow the PDO period */
+   int dc_shift_us;      /* how far ahead of the Sync0 edge to aim */
    int force, speed;
    int hold_ms;          /* disconnect: how long the target rides before close */
    int settle_ms;        /* disconnect: how long to stay down */
    int simulate;
-} cfg = { NULL, SOCKET_DEFAULT, "disconnect", 1000, 0, 500, 1000, 120, 300, 0 };
+} cfg = { NULL, SOCKET_DEFAULT, "disconnect", 1000, 0, 50, 500, 1000, 120, 300, 0 };
 
 /* ---- bus ------------------------------------------------------------ */
 
@@ -187,6 +190,7 @@ typedef struct {
    int  (*arm)(void);            /* during bring-up, before the OP request */
    void (*on_target)(void);      /* a guarded target just reached out[] */
    void (*cycle)(void);          /* once per PDO period, after send/receive */
+   int64_t (*align_ns)(void);    /* correction to the next wake-up, or NULL */
 } trigger_t;
 
 static const trigger_t *trig;
@@ -278,36 +282,82 @@ static void disc_cycle(void)
 static const trigger_t TRIG_DISCONNECT = {
    "disconnect",
    "write, hold, drop the link so the SM watchdog fires, reconnect",
-   disc_arm, disc_on_target, disc_cycle
+   disc_arm, disc_on_target, disc_cycle, NULL
 };
 
-/* -- sync0: distributed clocks, unproven on this hand ----------------- */
+/* -- sync0: distributed clocks, unproven on this hand -----------------
+ *
+ * The theory this implements: an SSC application commonly copies its PDO
+ * output buffer into the application variables inside the Sync0
+ * interrupt. If this firmware does that, never starting DC means the
+ * targets sit in the buffer unread - and "the hand only moves when you
+ * disconnect" would be our omission rather than its design.
+ *
+ * The 2026-08-05 attempt refused OPERATIONAL with AL=0x002d and reported
+ * pdelay=0, because the hand was behind a lab switch and distributed
+ * clocks cannot traverse one. Everything here is therefore written but
+ * unproven; it needs the direct link.
+ */
+static int64_t dc_period_ns;
+static int64_t dc_delta_ns;      /* last measured distance from the edge */
+static int64_t dc_offset_ns;     /* correction currently being applied */
+static int64_t dc_delta_worst;
 
 static int sync0_arm(void)
 {
-   uint32_t period_ns;
+   if (cfg.simulate) { dc_period_ns = 1000000000L / cfg.rate_hz; return 0; }
 
-   if (cfg.simulate) return 0;
    dc_hasdc = ctx.slavelist[1].hasdc;
    if (!dc_hasdc) return 5;
    dc_configured = ecx_configdc(&ctx) ? 1 : 0;
-   period_ns = (uint32_t)(cfg.dc_cycle_us ? cfg.dc_cycle_us
-                                          : 1000000 / cfg.rate_hz) * 1000u;
-   /* armed before the OP request so the slave is already producing the
+   dc_period_ns = (int64_t)(cfg.dc_cycle_us ? cfg.dc_cycle_us
+                                            : 1000000 / cfg.rate_hz) * 1000;
+   /* armed before the OP request, so the slave is already producing the
       interrupt by the time it starts consuming process data */
-   ecx_dcsync0(&ctx, 1, TRUE, period_ns, 0);
+   ecx_dcsync0(&ctx, 1, TRUE, (uint32_t)dc_period_ns, 0);
    dc_active = ctx.slavelist[1].DCactive;
    dc_pdelay = ctx.slavelist[1].pdelay;
+
+   /* A measured propagation delay of zero is physically nonsense unless
+      the link was never measured, which is exactly what a store-and-
+      forward switch produces. Say so here rather than leaving it to be
+      rediscovered from an AL code further down. */
+   if (dc_pdelay == 0)
+      logf_("WARNING: pdelay=0 after configdc - nothing measured the link. "
+            "That is what a switch in the path looks like, and DC cannot "
+            "work through one. Expect AL=0x002d next.");
    return 0;
 }
 
 static void sync0_on_target(void) { /* the loop already writes it out */ }
 static void sync0_cycle(void)     { /* Sync0 does the rest */ }
 
+/* Keep the local cycle a fixed distance ahead of the slave's Sync0 edge.
+   This is the controller from SOEM's own sample, gains included: the
+   proportional term pulls the phase in and the integral term absorbs the
+   drift between the host clock and the slave's. Untested against this
+   hand - it has never held OPERATIONAL with DC armed. */
+static int64_t sync0_align_ns(void)
+{
+   static int64_t integral;
+   int64_t delta;
+
+   if (cfg.simulate || dc_period_ns <= 0) return 0;
+   delta = (ctx.DCtime - (int64_t)cfg.dc_shift_us * 1000) % dc_period_ns;
+   if (delta > dc_period_ns / 2) delta -= dc_period_ns;
+   if (delta > 0) integral++;
+   if (delta < 0) integral--;
+   dc_delta_ns = delta;
+   if (delta < 0 ? -delta > dc_delta_worst : delta > dc_delta_worst)
+      dc_delta_worst = delta < 0 ? -delta : delta;
+   dc_offset_ns = -(delta / 100) - (integral / 20);
+   return dc_offset_ns;
+}
+
 static const trigger_t TRIG_SYNC0 = {
    "sync0",
    "arm distributed clocks; the slave applies its own buffer on Sync0",
-   sync0_arm, sync0_on_target, sync0_cycle
+   sync0_arm, sync0_on_target, sync0_cycle, sync0_align_ns
 };
 
 static const trigger_t *TRIGGERS[] = { &TRIG_DISCONNECT, &TRIG_SYNC0, NULL };
@@ -328,6 +378,33 @@ static const char *bringup_err(int rc)
                      "reports hasdc=0";
    }
    return "unknown failure";
+}
+
+/* The AL status code is the only place the slave says WHY it refused a
+   state, and for the DC work it is the entire answer - so translate the
+   handful that matter here instead of leaving a hex number in a log. */
+static const char *al_reading(uint16_t al)
+{
+   switch (al)
+   {
+      case 0x0000: return "";
+      case 0x001a: return "Synchronization Error - the slave is not seeing "
+                          "process data arrive when it expects it";
+      case 0x001b: return "Sync Manager Watchdog - process data stopped "
+                          "arriving";
+      case 0x002d: return "No Sync Error - the slave is in a DC sync mode "
+                          "and the Sync0 signal it expects is not arriving. "
+                          "With pdelay=0 this is the signature of a switch "
+                          "in the path: DC cannot traverse one. Move the "
+                          "hand's RJ45 to a direct link";
+      case 0x0030: return "DC Invalid Sync Configuration";
+      case 0x0032: return "DC Sync started while the PLL was not locked";
+      case 0x0033: return "DC Invalid Sync Cycle Time";
+      case 0x0034: return "DC Sync0 Cycle Time does not fit the application";
+      case 0x001e: return "Invalid Input Configuration";
+      case 0x001f: return "Invalid Output Configuration";
+   }
+   return "see the ETG AL status code table";
 }
 
 static int bus_bringup(void)
@@ -521,6 +598,20 @@ static void handle_line(client_t *c, char *line)
    }
    else if (!strcmp(cmd, "state"))
       reply_state(c);
+   else if (!strcmp(cmd, "dc"))
+   {
+      /* everything the decisive DC run needs to be read without stopping
+         the loop, including the number that gives the topology away */
+      uint16_t al = cfg.simulate ? 0 : ctx.slavelist[1].ALstatuscode;
+      creply(c, "{\"ok\":true,\"trigger\":\"%s\",\"hasdc\":%d,\"configdc\":%d,"
+                "\"dcactive\":%d,\"pdelay\":%d,\"al\":%u,\"al_reading\":\"%s\","
+                "\"cycle_ns\":%lld,\"delta_ns\":%lld,\"worst_delta_ns\":%lld,"
+                "\"offset_ns\":%lld}",
+             trig->name, dc_hasdc, dc_configured, dc_active, dc_pdelay,
+             (unsigned)al, al_reading(al), (long long)dc_period_ns,
+             (long long)dc_delta_ns, (long long)dc_delta_worst,
+             (long long)dc_offset_ns);
+   }
    else if (!strcmp(cmd, "target"))
    {
       int16_t tgt[6];
@@ -560,7 +651,7 @@ static void handle_line(client_t *c, char *line)
    }
    else
       creply(c, "{\"ok\":false,\"error\":\"unknown command '%s' - try hello, "
-                "scale, state, target, bye\"}", cmd);
+                "scale, dc, state, target, bye\"}", cmd);
 }
 
 static int socket_open(const char *path)
@@ -685,8 +776,14 @@ static void run_loop(void)
    clock_gettime(CLOCK_MONOTONIC, &next);
    while (running)
    {
-      next.tv_nsec += period_ns;
+      /* The correction is what makes this a DC-aligned loop rather than a
+         free-running one: it slides the local period so the frame keeps
+         arriving a fixed distance before the slave's Sync0 edge. The
+         disconnect strategy has no such edge and returns nothing. */
+      long adjust = trig->align_ns ? (long)trig->align_ns() : 0;
+      next.tv_nsec += period_ns + adjust;
       while (next.tv_nsec >= 1000000000L) { next.tv_nsec -= 1000000000L; next.tv_sec++; }
+      while (next.tv_nsec < 0) { next.tv_nsec += 1000000000L; next.tv_sec--; }
       clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
 
       serve_clients();
@@ -724,11 +821,13 @@ static void usage(void)
       "  --socket=PATH      unix socket clients connect to (default %s)\n"
       "  --rate-hz=N        PDO cycle rate, 50..2000 (default 1000)\n"
       "  --dc-cycle-us=N    sync0 period; 0 follows the PDO rate\n"
+      "  --dc-shift-us=N    how far ahead of the Sync0 edge to aim (default 50)\n"
       "  --force=N          0..1000 (default 500)\n"
       "  --speed=N          50..1000 (default 1000)\n"
       "  --hold-ms=N        disconnect: target rides this long before the drop\n"
       "  --settle-ms=N      disconnect: how long the link stays down\n"
       "  --simulate         no bus; a stand-in slave for testing clients\n"
+      "  --explain-al=CODE  read an AL status code aloud and exit\n"
       "\ntriggers:\n", SOCKET_DEFAULT);
    for (t = TRIGGERS; *t; t++)
       fprintf(stderr, "  %-12s %s\n", (*t)->name, (*t)->summary);
@@ -750,6 +849,8 @@ static int parse_args(int argc, char **argv)
       { if (int_arg(val, "rate-hz", 50, 2000, &cfg.rate_hz)) return 1; }
       else if (!strncmp(a, "--dc-cycle-us=", 14))
       { if (int_arg(val, "dc-cycle-us", 0, 100000, &cfg.dc_cycle_us)) return 1; }
+      else if (!strncmp(a, "--dc-shift-us=", 14))
+      { if (int_arg(val, "dc-shift-us", 0, 10000, &cfg.dc_shift_us)) return 1; }
       else if (!strncmp(a, "--force=", 8))
       { if (int_arg(val, "force", 0, 1000, &cfg.force)) return 1; }
       else if (!strncmp(a, "--speed=", 8))
@@ -758,6 +859,14 @@ static int parse_args(int argc, char **argv)
       { if (int_arg(val, "hold-ms", 0, 5000, &cfg.hold_ms)) return 1; }
       else if (!strncmp(a, "--settle-ms=", 12))
       { if (int_arg(val, "settle-ms", 0, 5000, &cfg.settle_ms)) return 1; }
+      else if (!strncmp(a, "--explain-al=", 13))
+      {
+         /* the DC run's whole answer is a hex code in a log line; being
+            able to look one up afterwards costs nothing */
+         unsigned al = (unsigned)strtoul(val, NULL, 0);
+         printf("AL 0x%04x: %s\n", al, al_reading((uint16_t)al));
+         exit(0);
+      }
       else if (!strcmp(a, "--simulate"))         cfg.simulate = 1;
       else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(); exit(0); }
       else
@@ -823,11 +932,14 @@ int main(int argc, char **argv)
    {
       fprintf(stderr, "handd: %s\n", bringup_err(rc));
       if (!cfg.simulate)
+      {
+         uint16_t al = ctx.slavelist[1].ALstatuscode;
          fprintf(stderr, "  iface=%s state=0x%02x AL=0x%04x  "
                          "dc: hasdc=%d configdc=%d DCactive=%d pdelay=%d\n",
-                 cfg.iface, ctx.slavelist[1].state,
-                 ctx.slavelist[1].ALstatuscode,
+                 cfg.iface, ctx.slavelist[1].state, al,
                  dc_hasdc, dc_configured, dc_active, dc_pdelay);
+         if (al) fprintf(stderr, "  AL 0x%04x: %s\n", al, al_reading(al));
+      }
       if (!cfg.simulate) ecx_close(&ctx);
       hs_unlock(lock_fd);
       return 2;

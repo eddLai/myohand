@@ -53,6 +53,19 @@ def main():
               f"not on a Mac)")
         return 0
 
+    # the AL code is the whole answer when a DC run fails, so the daemon has
+    # to be able to read one aloud without one having to happen first
+    al = subprocess.run([args.daemon, "--explain-al=0x002d"],
+                        capture_output=True, text=True).stdout
+    check("AL 0x002d is explained, switch and all",
+          "No Sync Error" in al and "switch" in al, al.strip())
+
+    # and an unknown trigger must never fall back to the default
+    bad = subprocess.run([args.daemon, "--trigger=nonsense"],
+                         capture_output=True, text=True)
+    check("an unknown trigger is refused rather than defaulted",
+          bad.returncode != 0 and "unknown trigger" in bad.stderr)
+
     log = open("/tmp/handd_test.log", "w+")
     proc = subprocess.Popen(
         [args.daemon, "--simulate", f"--socket={args.socket}",
@@ -73,6 +86,11 @@ def main():
         check("hello admits it is simulated", info["simulate"] is True)
         check("the daemon's scale matches hand_scale.py",
               info["scale"] == hand_scale.as_dict())
+
+        dc = hand.command("dc")
+        check("dc reports the fields the decisive DC run turns on",
+              all(k in dc for k in ("hasdc", "configdc", "dcactive", "pdelay",
+                                    "al", "al_reading", "delta_ns")), str(dc))
 
         st = hand.state()
         check("state reports six axes of telemetry",

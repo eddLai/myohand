@@ -8,6 +8,8 @@ soem_build/hand_open*
 soem_build/hand_wake
 hand_ctl
 handd
+experiments/ecat_scan
+experiments/ecat_persistent_probe
 __pycache__/
 *.log
 *.o

@@ -7,6 +7,7 @@ soem_build/hand_op*
 soem_build/hand_open*
 soem_build/hand_wake
 hand_ctl
+handd
 __pycache__/
 *.log
 *.o

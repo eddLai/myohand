@@ -4,10 +4,13 @@ EXP = experiments
 CFLAGS = -O2 -I $(SOEM)/include -I $(BUILD)/include -I $(SOEM)/osal -I $(SOEM)/osal/linux -I $(SOEM)/oshw/linux
 LDLIBS = $(BUILD)/libsoem.a -lpthread -lrt
 
-all: hand_ctl hand_set
+all: hand_ctl hand_set handd
 
 hand_ctl: hand_ctl.c hand_safety.c hand_safety.h $(BUILD)/libsoem.a
 	gcc $(CFLAGS) hand_ctl.c hand_safety.c -o hand_ctl $(LDLIBS)
+
+handd: handd.c hand_safety.c hand_safety.h $(BUILD)/libsoem.a
+	gcc $(CFLAGS) -I . handd.c hand_safety.c -o handd $(LDLIBS)
 
 hand_set: soem_build/hand_set.c hand_safety.c hand_safety.h $(BUILD)/libsoem.a
 	gcc $(CFLAGS) -I . soem_build/hand_set.c hand_safety.c -o soem_build/hand_set $(LDLIBS)
@@ -25,9 +28,10 @@ $(EXP)/ecat_persistent_probe: $(EXP)/ecat_persistent_probe.c hand_safety.c hand_
 
 # setcap must be re-applied after every rebuild - the capability lives on
 # the inode, not the path.
-cap: hand_ctl hand_set
+cap: hand_ctl hand_set handd
 	sudo setcap cap_net_raw,cap_net_admin+eip hand_ctl
 	sudo setcap cap_net_raw,cap_net_admin+eip soem_build/hand_set
+	sudo setcap cap_net_raw,cap_net_admin+eip handd
 
 cap-probe: probe
 	sudo setcap cap_net_raw,cap_net_admin+eip $(EXP)/ecat_scan

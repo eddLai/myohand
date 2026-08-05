@@ -121,33 +121,51 @@ confirming that verdict, not for eyeballing raw numbers.
 
 ## Which machine, which interface
 
-The hand lives on **`ntk@120.126.83.112`**, cabled to **`enp17s0`**.
+The hand is on **`ntk@120.126.83.112`**. As of 2026-08-05 it answers on
+**`eno1`**, reached through the lab switch (hand on switch port 15), and
+**not** on `enp17s0`. Verified with the read-only enumerator
+`experiments/ecat_scan` in the shared checkout on `.112`, which finds
+slaves without moving anything:
 
-Ground truth for that: the working copy on `.112` has already been edited
-to `#define IFACE "enp17s0"` in `hand_ctl.c` and the matching literal in
-`hand_set.c` — the committed `enp59s0f1` is a leftover from an earlier
-dev box and exists on none of these machines.
+    ./experiments/ecat_scan eno1
+    FOUND 1 EtherCAT slave(s) on eno1:
+      slave 1  name="SSC_Device"  vendor=0x00000001 product=0x00009252
+               rev=0x00020111  state=0x01
+    ./experiments/ecat_scan enp17s0
+    NO EtherCAT slave on enp17s0 (config_init=-1)
 
-**Do not point the master at `eno1`.** `eno1` carries `120.126.83.112/24`
-— it is the campus LAN and the SSH path in. Running an EtherCAT master on
-it sprays raw EtherCAT frames onto the university network and returns a
-meaningless "no EtherCAT slave". Being the only interface showing
-`LOWER_UP` is not evidence that the hand is on it; it is evidence that it
-is the uplink.
+Do not infer the interface from source or from link state — both lie
+here. `hand_ctl.c` on `.112` has been hand-edited to `enp17s0` (the
+committed `enp59s0f1` is from a long-gone dev box), yet `enp17s0` has no
+carrier and no slave. Run the scanner instead; it settles the question in
+one second and touches nothing.
 
-`.20` is not the hand machine (still hard-codes `enp59s0f1`, a NIC it
-does not have). `.228`/`kd240` has no checkout at all.
+`.20` is not the hand machine. `.228`/`kd240` has no checkout.
 
-Check the link before every run:
+### Why the current topology is not good enough for *this* experiment
 
-    cat /sys/class/net/enp17s0/carrier    # 1 = hand linked, 0 = no link
+`eno1` also carries `120.126.83.112/24` — the campus LAN and the SSH
+path in — and the route to the hand crosses a managed switch. Enumeration
+survives that fine. Sustained 1 kHz cyclic PDO does not: switch jitter or
+a dropped frame can delay a cycle past the SM watchdog, and a watchdog
+trip is *precisely the mechanism this experiment is trying to measure*.
+Running over the switch can therefore manufacture the effect under test.
 
-`0` means the RJ45 is unplugged **or** the hand is unpowered — an
-unpowered slave's PHY will not link either. Fix that before treating any
-"no EtherCAT slave" result as data.
+That gives an asymmetry worth exploiting:
+
+- A **`LIVE`** verdict over `eno1` is still trustworthy. If the axis
+  tracks the target with the link open, motion is motion — jitter cannot
+  fake it, and the hypothesis is falsified then and there.
+- A **`DISCONNECT-GATED`**, **`NO MOTION`**, or erratic verdict over
+  `eno1` proves nothing and must be rerun on a direct link.
+
+So a run over `eno1` is worth doing as a cheap first shot, but the
+definitive run needs the hand's RJ45 patched straight into `enp17s0`:
+
+    cat /sys/class/net/enp17s0/carrier    # 1 = direct link is up
 
 The probe takes the interface as argv[1] rather than hard-coding it,
-precisely so this mismatch cannot silently repeat, and does its own
+precisely so this ambiguity cannot silently repeat, and does its own
 post-close read instead of shelling out to `hand_ctl state`, which would
 fail on whatever interface that binary happens to have baked in.
 

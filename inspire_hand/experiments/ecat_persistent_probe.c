@@ -21,7 +21,10 @@
  *
  * Usage: ecat_persistent_probe <iface> [axis 0-5] [duration_s]
  *   axis: 0=pinky 1=ring 2=middle(default) 3=index 4=thumb_bend 5=thumb_rot
- * See PERSISTENT_OP_PLAN.md for how to read the output.
+ * Plan, result and rerun instructions live in the ExoPulse_docs vault:
+ * Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/
+ * Persistent_OP_Probe.md. Raw trace of the 2026-08-05 run is next to this
+ * file as probe_2026-08-05_eno1_axis2.csv.
  */
 #include "soem/soem.h"
 #include "hand_safety.h"

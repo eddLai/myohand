@@ -21,9 +21,21 @@ enum { AX_PINKY = 0, AX_RING, AX_MIDDLE, AX_INDEX, AX_THUMB_BEND, AX_THUMB_ROT }
 #define HS_OUT_SPEED  13
 
 /* Exclusive bus lock: two EtherCAT masters on one NIC make the slave
-   refuse OPERATIONAL. Blocks up to timeout_s. Returns fd, or -1. */
+   refuse OPERATIONAL. Blocks up to timeout_s. Returns fd, or -1.
+   Note the lock is per-host: it cannot stop a master on another machine
+   from grabbing the same slave through the lab switch. */
 int  hs_lock(int timeout_s);
 void hs_unlock(int fd);
+
+/* NIC the master opens, from $ECAT_IFACE, else HS_IFACE_DEFAULT.
+   The hand has answered on a different interface on every host that has
+   driven it (eno1 on .28, enp17s0 on .112, eth0 or the PL-backed eth1 on
+   the KD240 depending on where the cable is), so this must not be baked
+   into the binary. Enumerate with ecat_scan rather than guessing. */
+#ifndef HS_IFACE_DEFAULT
+#define HS_IFACE_DEFAULT "eth0"
+#endif
+const char *hs_iface(void);
 
 /* ANGLEACT (~890 closed .. ~1850 open) mapped onto the 0..2000 target scale. */
 int16_t hs_ang_to_target(int16_t ang);

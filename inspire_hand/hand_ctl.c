@@ -4,6 +4,9 @@
  *   hand_ctl state
  *   hand_ctl pose P R M I TB TR [force] [speed]
  *       targets 0..2000 (0=closed, 2000=open), -1 = leave axis unchanged
+ *   $ECAT_IFACE selects the NIC (default eth0). Confirm with ecat_scan
+ *   before assuming - the hand has answered on a different interface on
+ *   every host that has driven it.
  *
  * Behavior encodes the reverse-engineered F1 semantics:
  *   - boot lands all axes in STATUS=7 (standby); wiggle around current
@@ -23,7 +26,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define IFACE "enp59s0f1"
 #define WAKE_MS_MAX 12000
 #define HOLD_MS 1200
 
@@ -56,6 +58,7 @@ int main(int argc, char **argv)
    int16_t tgt[6] = {-1, -1, -1, -1, -1, -1};
    int force = 500, speed = 800;
    int do_pose = 0, i, chk, t, lock_fd, guarded = 0;
+   const char *iface;
    char why[256] = {0};
 
    if (argc < 2) fail("usage: hand_ctl state | pose P R M I TB TR [force] [speed]");
@@ -77,10 +80,11 @@ int main(int argc, char **argv)
    else if (strcmp(argv[1], "state"))
       fail("unknown command");
 
+   iface = hs_iface();
    lock_fd = hs_lock(20);
    if (lock_fd < 0) fail("bus busy: another master holds the hand (20s timeout)");
-   if (!ecx_init(&ctx, IFACE)) fail("ecx_init (need CAP_NET_RAW or root)");
-   if (ecx_config_init(&ctx) <= 0) fail("no EtherCAT slave (check link/power)");
+   if (!ecx_init(&ctx, iface)) fail("ecx_init (need CAP_NET_RAW or root; check $ECAT_IFACE)");
+   if (ecx_config_init(&ctx) <= 0) fail("no EtherCAT slave (check link/power; run ecat_scan on $ECAT_IFACE)");
    ctx.slavelist[1].mbx_proto = 0; /* dead CoE mailbox on this SSC build */
    ecx_config_map_group(&ctx, IOmap, 0);
    ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);

@@ -1,6 +1,7 @@
 /* hand_set p r m i tb tr  -- set RH56F1 pose via EtherCAT (0=closed, 2000=open, -1=hold)
    Auto-wakes axes stuck in STATUS=7 by wiggling targets, then parks the pose
-   and exits so the SM-watchdog timeout triggers execution. */
+   and exits so the SM-watchdog timeout triggers execution.
+   $ECAT_IFACE selects the NIC (default eth0); confirm it with ecat_scan. */
 #include "soem/soem.h"
 #include "hand_safety.h"
 #include <stdio.h>
@@ -35,8 +36,8 @@ int main(int argc, char **argv)
 
    lock_fd = hs_lock(20);
    if (lock_fd < 0) { printf("bus busy: another master holds the hand\n"); return 3; }
-   if (!ecx_init(&ctx, "enp59s0f1")) { printf("init fail\n"); return 1; }
-   if (ecx_config_init(&ctx) <= 0) { printf("no slaves\n"); return 1; }
+   if (!ecx_init(&ctx, hs_iface())) { printf("init fail on %s\n", hs_iface()); return 1; }
+   if (ecx_config_init(&ctx) <= 0) { printf("no slaves on %s\n", hs_iface()); return 1; }
    ctx.slavelist[1].mbx_proto = 0;
    ecx_config_map_group(&ctx, IOmap, 0);
    ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);

@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -25,6 +26,12 @@
 
 #define THUMB_BEND_FORCE 1900   /* above the phantom force reading */
 #define THUMB_BEND_SPEED 500
+
+const char *hs_iface(void)
+{
+   const char *e = getenv("ECAT_IFACE");
+   return (e && *e) ? e : HS_IFACE_DEFAULT;
+}
 
 static int clampi(int v, int lo, int hi)
 {

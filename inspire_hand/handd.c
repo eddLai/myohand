@@ -46,12 +46,16 @@
  * movement, and the caller that owns the pose should be the one to change
  * it.
  */
+/* sched_setaffinity and cpu_set_t are GNU extensions */
+#define _GNU_SOURCE
+
 #include "soem/soem.h"
 #include "hand_safety.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -61,6 +65,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -94,9 +99,12 @@ static struct {
    int move_step;        /* target change big enough to time a step response */
    int move_eps;         /* ANGLEACT change that counts as motion having begun */
    const char *lat_path; /* CSV of per-step latency breakdowns */
+   int cpu;              /* pin the loop to this core, -1 = wherever */
+   int rt_prio;          /* SCHED_FIFO priority, 0 = leave scheduling alone */
+   int lock_memory;      /* mlockall, so a page fault cannot stall a cycle */
    int simulate;
 } cfg = { NULL, SOCKET_DEFAULT, "disconnect", 1000, 0, 50, 500, 1000, 120, 300,
-          200, 10, NULL, 0 };
+          200, 10, NULL, -1, 0, 0, 0 };
 
 /* ---- bus ------------------------------------------------------------ */
 
@@ -356,10 +364,37 @@ static void lat_sample(void)
       lat_flush();
 }
 
+/* How late each wake-up was against the schedule it asked for. This is
+   what --cpu / --rt-prio / isolcpus are bought with, so it is measured
+   rather than assumed - and it is measured the same way under either
+   trigger. */
+#define JIT_RING 1024
+static long jit_ring[JIT_RING];
+static int jit_n, jit_next;
+static long jit_worst;
+
+static void jit_record(long late_us)
+{
+   if (late_us < 0) late_us = 0;
+   jit_ring[jit_next] = late_us;
+   jit_next = (jit_next + 1) % JIT_RING;
+   if (jit_n < JIT_RING) jit_n++;
+   if (late_us > jit_worst) jit_worst = late_us;
+}
+
 static int cmp_long(const void *a, const void *b)
 {
    long x = *(const long *)a, y = *(const long *)b;
    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+static long jit_pct(int pct)
+{
+   long vals[JIT_RING];
+   if (!jit_n) return -1;
+   memcpy(vals, jit_ring, (size_t)jit_n * sizeof vals[0]);
+   qsort(vals, (size_t)jit_n, sizeof vals[0], cmp_long);
+   return vals[(jit_n - 1) * pct / 100];
 }
 
 /* percentile of one column across the ring, ignoring the rows where the
@@ -856,7 +891,8 @@ static void handle_line(client_t *c, char *line)
                 "\"unit\":\"us\",\"p50\":{\"vision\":%ld,\"send\":%ld,"
                 "\"ipc\":%ld,\"queue\":%ld,\"wire\":%ld,\"exec\":%ld,"
                 "\"move\":%ld,\"total\":%ld},\"p95_total\":%ld,"
-                "\"max_total\":%ld}",
+                "\"max_total\":%ld,\"cycle_late_us\":{\"samples\":%d,"
+                "\"p50\":%ld,\"p95\":%ld,\"p99\":%ld,\"max\":%ld}}",
              trig->name, lat_n,
              lat_pct(offsetof(lat_rec_t, vision), 50),
              lat_pct(offsetof(lat_rec_t, send), 50),
@@ -867,7 +903,8 @@ static void handle_line(client_t *c, char *line)
              lat_pct(offsetof(lat_rec_t, move), 50),
              lat_pct(offsetof(lat_rec_t, total), 50),
              lat_pct(offsetof(lat_rec_t, total), 95),
-             lat_pct(offsetof(lat_rec_t, total), 100));
+             lat_pct(offsetof(lat_rec_t, total), 100),
+             jit_n, jit_pct(50), jit_pct(95), jit_pct(99), jit_worst);
    }
    else if (!strcmp(cmd, "bye"))
    {
@@ -992,6 +1029,54 @@ static void serve_clients(void)
    }
 }
 
+/* ---- determinism ----------------------------------------------------
+ *
+ * The board runs 5.15.0-xilinx-zynqmp, which is not PREEMPT_RT, so these
+ * are the cheap measures: keep the loop on one core, run it ahead of
+ * everything else on that core, and stop the kernel reclaiming its pages.
+ * Isolating the core itself (isolcpus) is a boot-time change and lives in
+ * experiments/rt_check.sh, which reports rather than applies it.
+ *
+ * Each one says whether it actually took effect. A daemon that silently
+ * failed to get SCHED_FIFO and then produced jitter numbers would be
+ * worse than one that never asked.
+ */
+static void apply_determinism(void)
+{
+   if (cfg.cpu >= 0)
+   {
+      cpu_set_t set;
+      CPU_ZERO(&set);
+      CPU_SET(cfg.cpu, &set);
+      if (sched_setaffinity(0, sizeof set, &set) == 0)
+         logf_("pinned to CPU %d", cfg.cpu);
+      else
+         logf_("WARNING: could not pin to CPU %d (%s) - the loop is still "
+               "free to migrate", cfg.cpu, strerror(errno));
+   }
+   if (cfg.rt_prio > 0)
+   {
+      struct sched_param sp;
+      memset(&sp, 0, sizeof sp);
+      sp.sched_priority = cfg.rt_prio;
+      if (sched_setscheduler(0, SCHED_FIFO, &sp) == 0)
+         logf_("SCHED_FIFO priority %d", cfg.rt_prio);
+      else
+         logf_("WARNING: SCHED_FIFO %d refused (%s) - still SCHED_OTHER. "
+               "The binary needs cap_sys_nice (make cap) or root",
+               cfg.rt_prio, strerror(errno));
+   }
+   if (cfg.lock_memory)
+   {
+      if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0)
+         logf_("memory locked");
+      else
+         logf_("WARNING: mlockall refused (%s) - a page fault can still "
+               "stall a cycle. The binary needs cap_ipc_lock (make cap)",
+               strerror(errno));
+   }
+}
+
 /* ---- main loop ------------------------------------------------------ */
 
 static void run_loop(void)
@@ -1011,6 +1096,12 @@ static void run_loop(void)
       while (next.tv_nsec >= 1000000000L) { next.tv_nsec -= 1000000000L; next.tv_sec++; }
       while (next.tv_nsec < 0) { next.tv_nsec += 1000000000L; next.tv_sec--; }
       clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+      {
+         struct timespec woke;
+         clock_gettime(CLOCK_MONOTONIC, &woke);
+         jit_record((long)(((int64_t)(woke.tv_sec - next.tv_sec) * 1000000000L
+                            + (woke.tv_nsec - next.tv_nsec)) / 1000));
+      }
 
       serve_clients();
       if (bus_up) pd();
@@ -1058,6 +1149,9 @@ static void usage(void)
       "  --latency-log=PATH CSV of the per-step latency breakdown\n"
       "  --move-step=N      target change big enough to time (default 200)\n"
       "  --move-eps=N       ANGLEACT change that counts as motion (default 10)\n"
+      "  --cpu=N            pin the PDO loop to one core\n"
+      "  --rt-prio=N        run it SCHED_FIFO at this priority (needs cap_sys_nice)\n"
+      "  --lock-memory      mlockall, so a page fault cannot stall a cycle\n"
       "\ntriggers:\n", SOCKET_DEFAULT);
    for (t = TRIGGERS; *t; t++)
       fprintf(stderr, "  %-12s %s\n", (*t)->name, (*t)->summary);
@@ -1102,6 +1196,11 @@ static int parse_args(int argc, char **argv)
       { if (int_arg(val, "move-step", 1, 2000, &cfg.move_step)) return 1; }
       else if (!strncmp(a, "--move-eps=", 11))
       { if (int_arg(val, "move-eps", 1, 500, &cfg.move_eps)) return 1; }
+      else if (!strncmp(a, "--cpu=", 6))
+      { if (int_arg(val, "cpu", 0, 63, &cfg.cpu)) return 1; }
+      else if (!strncmp(a, "--rt-prio=", 10))
+      { if (int_arg(val, "rt-prio", 1, 99, &cfg.rt_prio)) return 1; }
+      else if (!strcmp(a, "--lock-memory"))      cfg.lock_memory = 1;
       else if (!strcmp(a, "--simulate"))         cfg.simulate = 1;
       else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(); exit(0); }
       else
@@ -1207,6 +1306,7 @@ int main(int argc, char **argv)
       hs_unlock(lock_fd);
       return 4;
    }
+   apply_determinism();
    logf_("ready - listening on %s", cfg.sock_path);
 
    run_loop();

@@ -1,0 +1,39 @@
+[Unit]
+Description=Inspire RH56F1 EtherCAT daemon (handd)
+Documentation=file://@INSTALL_DIR@/README.md
+# The NIC has to exist before the master can open it. On the KD240 the
+# dedicated port is eth1, which only exists while a PL design with an AXI
+# Ethernet core is loaded - if that is not up yet, handd exits with a
+# readable reason and systemd retries below.
+After=network.target
+Wants=network.target
+# These two belong to [Unit], not [Service] - systemd ignores them with a
+# warning if they are put next to Restart=, which reads like it works.
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+User=@USER@
+ExecStart=@INSTALL_DIR@/handd $HANDD_ARGS
+EnvironmentFile=-/etc/default/handd
+WorkingDirectory=@INSTALL_DIR@
+
+# handd carries its own capabilities via setcap (make cap), so it does not
+# need to start as root. Keep them here too, so a distribution that strips
+# file capabilities does not silently downgrade the loop to SCHED_OTHER.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_NICE CAP_IPC_LOCK
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_NICE CAP_IPC_LOCK
+
+# A daemon that cannot reach the bus should stay down and be noticed, not
+# thrash the hand with reconnect attempts. Five tries then stop.
+Restart=on-failure
+RestartSec=5
+
+# The hand keeps whatever pose it was last given when handd stops; there
+# is deliberately no park-on-exit, so a restart is not a surprise movement.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

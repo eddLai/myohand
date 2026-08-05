@@ -1,0 +1,11 @@
+# /etc/default/handd - options for the resident EtherCAT daemon.
+#
+# Edited here rather than in the unit file, so an upgrade of the unit does
+# not overwrite the site's interface name and tuning.
+#
+# --trigger: disconnect is the default and the only path ever measured to
+#   drive this hand. Do not switch to sync0 here until a direct-link DC
+#   run has actually succeeded; a daemon that fails to reach OPERATIONAL
+#   at boot is a worse failure than a slow one that works.
+
+HANDD_ARGS="--iface=eth1 --trigger=disconnect --rate-hz=1000 --cpu=3 --rt-prio=80 --lock-memory --latency-log=/var/log/handd_latency.csv"

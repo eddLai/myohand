@@ -31,7 +31,10 @@ $(EXP)/ecat_persistent_probe: $(EXP)/ecat_persistent_probe.c hand_safety.c hand_
 cap: hand_ctl hand_set handd
 	sudo setcap cap_net_raw,cap_net_admin+eip hand_ctl
 	sudo setcap cap_net_raw,cap_net_admin+eip soem_build/hand_set
-	sudo setcap cap_net_raw,cap_net_admin+eip handd
+	# handd asks for two more than the others: cap_sys_nice to take
+	# SCHED_FIFO and cap_ipc_lock to mlockall. Without them it still runs,
+	# it just says so and stays on the ordinary scheduler.
+	sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+eip handd
 
 cap-probe: probe
 	sudo setcap cap_net_raw,cap_net_admin+eip $(EXP)/ecat_scan

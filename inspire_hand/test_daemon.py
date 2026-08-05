@@ -158,6 +158,13 @@ def main():
         check("the disconnect trigger's execution stage is timed too",
               stats["p50"]["exec"] >= 0, str(stats["p50"]))
 
+        jit = stats["cycle_late_us"]
+        check("cycle jitter is measured, not assumed",
+              jit["samples"] > 100 and jit["p50"] >= 0 and
+              jit["max"] >= jit["p95"] >= jit["p50"], str(jit))
+        check("the loop keeps its period to well inside one cycle",
+              jit["p95"] < 1000000 // 1000, f"p95={jit['p95']}us of a 1000us cycle")
+
         rows = hand_latency.read_csv(args.latency_log)
         stamped = [r for r in rows if r["vision_us"] > 0]
         check("the latency log is written and parses",

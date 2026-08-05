@@ -119,17 +119,37 @@ confirming that verdict, not for eyeballing raw numbers.
   fires. Default axis is middle finger.
 - Bounded run time (default 10 s, hard cap 60 s).
 
-## Before running
+## Which machine, which interface
 
-`hand_ctl.c` / `hand_set.c` both hard-code `IFACE "enp59s0f1"`, which
-does not exist on `ntk@120.126.83.112` — the live interface there is
-`eno1` (confirmed via `ip -br link show`; it's the only one showing
-`LOWER_UP`). This probe takes the interface as argv[1] instead of
-hard-coding it, specifically so this mismatch can't silently repeat, and
-does its own post-close read rather than shelling out to `hand_ctl state`
-(which would fail on the wrong interface). Confirm the hand's RJ45 is
-actually the cable plugged into whichever interface you pass before
-trusting a "no EtherCAT slave" result as meaningful.
+The hand lives on **`ntk@120.126.83.112`**, cabled to **`enp17s0`**.
+
+Ground truth for that: the working copy on `.112` has already been edited
+to `#define IFACE "enp17s0"` in `hand_ctl.c` and the matching literal in
+`hand_set.c` — the committed `enp59s0f1` is a leftover from an earlier
+dev box and exists on none of these machines.
+
+**Do not point the master at `eno1`.** `eno1` carries `120.126.83.112/24`
+— it is the campus LAN and the SSH path in. Running an EtherCAT master on
+it sprays raw EtherCAT frames onto the university network and returns a
+meaningless "no EtherCAT slave". Being the only interface showing
+`LOWER_UP` is not evidence that the hand is on it; it is evidence that it
+is the uplink.
+
+`.20` is not the hand machine (still hard-codes `enp59s0f1`, a NIC it
+does not have). `.228`/`kd240` has no checkout at all.
+
+Check the link before every run:
+
+    cat /sys/class/net/enp17s0/carrier    # 1 = hand linked, 0 = no link
+
+`0` means the RJ45 is unplugged **or** the hand is unpowered — an
+unpowered slave's PHY will not link either. Fix that before treating any
+"no EtherCAT slave" result as data.
+
+The probe takes the interface as argv[1] rather than hard-coding it,
+precisely so this mismatch cannot silently repeat, and does its own
+post-close read instead of shelling out to `hand_ctl state`, which would
+fail on whatever interface that binary happens to have baked in.
 
 ## Run
 
@@ -140,4 +160,4 @@ trusting a "no EtherCAT slave" result as meaningful.
         -o experiments/ecat_persistent_probe \
         soem_build/build/libsoem.a -lpthread -lrt
     sudo setcap cap_net_raw,cap_net_admin+eip experiments/ecat_persistent_probe
-    ./experiments/ecat_persistent_probe eno1 2 10 | tee probe.csv
+    ./experiments/ecat_persistent_probe enp17s0 2 10 | tee probe.csv

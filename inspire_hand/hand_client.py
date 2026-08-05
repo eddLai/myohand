@@ -106,13 +106,28 @@ class HandClient:
     def state(self):
         return self.command("state")
 
-    def target(self, targets):
+    def target(self, targets, stamps=None):
         """Command a 6-axis pose: [pinky, ring, middle, index, thumb_bend,
         thumb_rot]. Out-of-range values are clamped by the daemon, -1
-        holds an axis where it is."""
+        holds an axis where it is.
+
+        Pass a hand_latency.Stamps to hand over the two timings only the
+        client can see; without one the daemon still measures everything
+        from its own side."""
         if len(targets) != 6:
             raise HandDaemonError("need exactly 6 targets")
-        return self.command("target " + " ".join(str(int(t)) for t in targets))
+        line = "target " + " ".join(str(int(t)) for t in targets)
+        if stamps is not None:
+            line += stamps.as_tokens()
+        return self.command(line)
+
+    def stats(self):
+        """The latency breakdown so far, same columns for either trigger."""
+        return self.command("stats")
+
+    def dc(self):
+        """Distributed-clock health, with the AL code read aloud."""
+        return self.command("dc")
 
     @property
     def simulated(self):

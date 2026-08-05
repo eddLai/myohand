@@ -54,6 +54,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -90,8 +91,12 @@ static struct {
    int force, speed;
    int hold_ms;          /* disconnect: how long the target rides before close */
    int settle_ms;        /* disconnect: how long to stay down */
+   int move_step;        /* target change big enough to time a step response */
+   int move_eps;         /* ANGLEACT change that counts as motion having begun */
+   const char *lat_path; /* CSV of per-step latency breakdowns */
    int simulate;
-} cfg = { NULL, SOCKET_DEFAULT, "disconnect", 1000, 0, 50, 500, 1000, 120, 300, 0 };
+} cfg = { NULL, SOCKET_DEFAULT, "disconnect", 1000, 0, 50, 500, 1000, 120, 300,
+          200, 10, NULL, 0 };
 
 /* ---- bus ------------------------------------------------------------ */
 
@@ -108,6 +113,7 @@ static int dc_hasdc, dc_configured, dc_active;
 static int32_t dc_pdelay;
 
 static volatile sig_atomic_t running = 1;
+static uint32_t seq;              /* every accepted target gets one */
 
 static void on_signal(int s) { (void)s; running = 0; }
 
@@ -191,9 +197,188 @@ typedef struct {
    void (*on_target)(void);      /* a guarded target just reached out[] */
    void (*cycle)(void);          /* once per PDO period, after send/receive */
    int64_t (*align_ns)(void);    /* correction to the next wake-up, or NULL */
+   int gates_on_exec;            /* does this trigger have an execution step
+                                    of its own that a record must wait for? */
 } trigger_t;
 
 static const trigger_t *trig;
+
+/* ---- latency instrumentation ----------------------------------------
+ *
+ * This is the ruler the DC question gets settled with, so it has to exist
+ * before the measurement and it has to read the same way for both
+ * triggers. Nothing here is trigger-specific: every stage is a pair of
+ * timestamps, and the strategies differ only in which stages take time.
+ *
+ *   vision   frame grabbed        -> targets computed      (client)
+ *   send     targets computed     -> written to the socket (client)
+ *   ipc      written to socket    -> parsed here           (this host)
+ *   queue    parsed               -> reaches the PDO buffer
+ *   wire     reaches the buffer   -> the frame is actually sent
+ *   exec     frame sent           -> the execution disconnect (disconnect only)
+ *   move     frame sent           -> ANGLEACT starts changing
+ *   total    frame grabbed        -> ANGLEACT starts changing
+ *
+ * The client stamps the first three with CLOCK_MONOTONIC; it runs on this
+ * same host, so the clocks are the same clock. A client that sends no
+ * stamps still gets everything from `ipc` onward.
+ *
+ * Motion onset is only tracked for a target that is a real step away from
+ * what is already commanded, and only one at a time. In a 50 Hz stream
+ * every frame supersedes the last one before an actuator could possibly
+ * respond, so "onset" would be meaningless; the step response is the
+ * thing worth comparing between triggers.
+ */
+#define LAT_RING   512
+#define LAT_TIMEOUT_MS 4000
+
+typedef struct {
+   uint32_t id;
+   long vision, send, ipc, queue, wire, exec, move, total;
+   int moved;
+} lat_rec_t;
+
+static lat_rec_t lat_ring[LAT_RING];
+static int lat_n, lat_next;
+static FILE *lat_log;
+
+static struct {
+   int active;
+   uint32_t id;
+   int64_t t_frame, t_map, t_send, t_recv, t_write, t_wire, t_exec, t_move;
+   int16_t ang0[6];
+   int16_t tgt[6];
+} track;
+
+static int64_t now_ns(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (int64_t)ts.tv_sec * 1000000000L + ts.tv_nsec;
+}
+
+static long us_between(int64_t a, int64_t b)
+{
+   return (!a || !b) ? -1 : (long)((b - a) / 1000);
+}
+
+static void lat_flush(void)
+{
+   lat_rec_t *r = &lat_ring[lat_next];
+
+   if (!track.active) return;
+   r->id     = track.id;
+   r->vision = us_between(track.t_frame, track.t_map);
+   r->send   = us_between(track.t_map, track.t_send);
+   r->ipc    = us_between(track.t_send, track.t_recv);
+   r->queue  = us_between(track.t_recv, track.t_write);
+   r->wire   = us_between(track.t_write, track.t_wire);
+   r->exec   = us_between(track.t_wire, track.t_exec);
+   r->move   = us_between(track.t_wire, track.t_move);
+   r->total  = us_between(track.t_frame, track.t_move);
+   r->moved  = track.t_move != 0;
+   lat_next = (lat_next + 1) % LAT_RING;
+   if (lat_n < LAT_RING) lat_n++;
+
+   if (lat_log)
+   {
+      fprintf(lat_log, "%u,%s,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%d\n",
+              r->id, trig->name, r->vision, r->send, r->ipc, r->queue,
+              r->wire, r->exec, r->move, r->total, r->moved);
+      fflush(lat_log);
+   }
+   track.active = 0;
+}
+
+/* The last pose a client actually asked for. Not out[], which the
+   disconnect strategy parks back to "hold" on every reconnect - comparing
+   against that would make almost nothing look like a step. */
+static int16_t last_cmd[6] = { HS_TGT_HOLD, HS_TGT_HOLD, HS_TGT_HOLD,
+                               HS_TGT_HOLD, HS_TGT_HOLD, HS_TGT_HOLD };
+
+/* Is this target a step worth timing, rather than the next frame of a
+   stream that is already moving? */
+static int lat_is_step(const int16_t *tgt)
+{
+   int i, worst = 0;
+   for (i = 0; i < 6; i++)
+   {
+      int d;
+      if (tgt[i] == HS_TGT_HOLD) continue;
+      if (last_cmd[i] == HS_TGT_HOLD) return 1;   /* first real command */
+      d = tgt[i] - last_cmd[i];
+      if (d < 0) d = -d;
+      if (d > worst) worst = d;
+   }
+   return worst >= cfg.move_step;
+}
+
+static void lat_begin(const int16_t *tgt, int64_t t_frame, int64_t t_map,
+                      int64_t t_send, int64_t t_recv)
+{
+   int i;
+   if (track.active) return;              /* one step in flight at a time */
+   if (!lat_is_step(tgt)) return;
+   memset(&track, 0, sizeof track);
+   track.active = 1;
+   track.id = ++seq;
+   track.t_frame = t_frame;
+   track.t_map = t_map;
+   track.t_send = t_send;
+   track.t_recv = t_recv;
+   memcpy(track.tgt, tgt, sizeof track.tgt);
+   for (i = 0; i < 6; i++) track.ang0[i] = bus_up ? in[IN_ANG + i] : 0;
+}
+
+/* called once per cycle, after send/receive */
+static void lat_sample(void)
+{
+   int i;
+   if (!track.active) return;
+   if (track.t_write && !track.t_wire) { track.t_wire = now_ns(); return; }
+   if (!track.t_wire) return;
+   if (bus_up && !track.t_move)
+      for (i = 0; i < 6; i++)
+      {
+         int d;
+         if (track.tgt[i] == HS_TGT_HOLD) continue;
+         d = in[IN_ANG + i] - track.ang0[i];
+         if (d < 0) d = -d;
+         if (d > cfg.move_eps) { track.t_move = now_ns(); break; }
+      }
+   /* Do not close the record the instant the axis twitches: with the
+      disconnect trigger the execution step has its own timestamp and it
+      can land after motion begins (it does in simulation, where nothing
+      gates on the disconnect). Wait for the stage the trigger owes, or
+      for the timeout. */
+   if ((track.t_move && (!trig->gates_on_exec || track.t_exec)) ||
+       now_ns() - track.t_wire > (int64_t)LAT_TIMEOUT_MS * 1000000L)
+      lat_flush();
+}
+
+static int cmp_long(const void *a, const void *b)
+{
+   long x = *(const long *)a, y = *(const long *)b;
+   return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+/* percentile of one column across the ring, ignoring the rows where the
+   stage did not apply (-1) */
+static long lat_pct(size_t offset, int pct)
+{
+   long vals[LAT_RING];
+   int i, n = 0;
+   for (i = 0; i < lat_n; i++)
+   {
+      long v = *(long *)((char *)&lat_ring[i] + offset);
+      if (v >= 0) vals[n++] = v;
+   }
+   if (!n) return -1;
+   qsort(vals, (size_t)n, sizeof vals[0], cmp_long);
+   return vals[(n - 1) * pct / 100];
+}
+
+
 
 static void pd(void)
 {
@@ -248,6 +433,7 @@ static void disc_cycle(void)
    if (ds_state == DS_HOLD && t >= ds_at)
    {
       /* the disconnect IS the execution command on this firmware */
+      if (track.active && !track.t_exec) track.t_exec = now_ns();
       bus_close();
       ds_state = DS_DOWN;
       ds_at = t + cfg.settle_ms;
@@ -282,7 +468,7 @@ static void disc_cycle(void)
 static const trigger_t TRIG_DISCONNECT = {
    "disconnect",
    "write, hold, drop the link so the SM watchdog fires, reconnect",
-   disc_arm, disc_on_target, disc_cycle, NULL
+   disc_arm, disc_on_target, disc_cycle, NULL, 1
 };
 
 /* -- sync0: distributed clocks, unproven on this hand -----------------
@@ -357,7 +543,7 @@ static int64_t sync0_align_ns(void)
 static const trigger_t TRIG_SYNC0 = {
    "sync0",
    "arm distributed clocks; the slave applies its own buffer on Sync0",
-   sync0_arm, sync0_on_target, sync0_cycle, sync0_align_ns
+   sync0_arm, sync0_on_target, sync0_cycle, sync0_align_ns, 0
 };
 
 static const trigger_t *TRIGGERS[] = { &TRIG_DISCONNECT, &TRIG_SYNC0, NULL };
@@ -518,7 +704,15 @@ static void apply_target(const int16_t *want, char *why, size_t n, int *guarded)
    }
    *guarded  = hs_stall_relief(tgt, &in[IN_CUR], &in[IN_STA], &in[IN_ANG], why, n);
    *guarded += hs_interlock(tgt, &in[IN_ANG], why, n);
+   if (track.active && !track.t_write)
+   {
+      /* the guard may have altered the pose; time what actually goes out */
+      memcpy(track.tgt, tgt, sizeof track.tgt);
+      for (i = 0; i < 6; i++) track.ang0[i] = in[IN_ANG + i];
+      track.t_write = now_ns();
+   }
    for (i = 0; i < 6; i++) out[HS_OUT_TARGET + i] = tgt[i];
+   memcpy(last_cmd, tgt, sizeof last_cmd);
    trig->on_target();
 }
 
@@ -532,7 +726,6 @@ typedef struct {
 
 static client_t clients[MAX_CLIENTS];
 static int listen_fd = -1;
-static uint32_t seq;
 
 static void creply(client_t *c, const char *fmt, ...)
 {
@@ -617,10 +810,12 @@ static void handle_line(client_t *c, char *line)
       int16_t tgt[6];
       char why[256] = {0};
       int i, guarded = 0;
+      int64_t t_frame = 0, t_map = 0, t_send = 0, t_recv = now_ns();
+      char *tok;
       for (i = 0; i < 6; i++)
       {
-         char *tok = strtok(NULL, " \t");
          long v;
+         tok = strtok(NULL, " \t");
          if (!tok)
          {
             creply(c, "{\"ok\":false,\"error\":\"target needs 6 values "
@@ -633,15 +828,46 @@ static void handle_line(client_t *c, char *line)
          tgt[i] = hs_clamp_target((int16_t)(v < -32768 ? -32768 :
                                             v > 32767 ? 32767 : v));
       }
-      if (strtok(NULL, " \t"))
+      /* Optional stamps let the client hand over the stages only it can
+         see. Same host, same CLOCK_MONOTONIC, so they are comparable
+         without any clock synchronisation. */
+      while ((tok = strtok(NULL, " \t")) != NULL)
       {
-         creply(c, "{\"ok\":false,\"error\":\"target takes exactly 6 values\"}");
-         return;
+         if      (!strncmp(tok, "t_frame=", 8)) t_frame = strtoll(tok + 8, NULL, 10);
+         else if (!strncmp(tok, "t_map=", 6))   t_map   = strtoll(tok + 6, NULL, 10);
+         else if (!strncmp(tok, "t_send=", 7))  t_send  = strtoll(tok + 7, NULL, 10);
+         else
+         {
+            creply(c, "{\"ok\":false,\"error\":\"target takes 6 values plus "
+                      "optional t_frame=/t_map=/t_send= stamps, not '%s'\"}", tok);
+            return;
+         }
       }
+      lat_begin(tgt, t_frame, t_map, t_send, t_recv);
       apply_target(tgt, why, sizeof why, &guarded);
       creply(c, "{\"ok\":true,\"seq\":%u,\"guarded\":%d,\"guard_note\":\"%s\","
                 "\"queued\":%s}",
              ++seq, guarded, why, bus_up ? "false" : "true");
+   }
+   else if (!strcmp(cmd, "stats"))
+   {
+      /* the same breakdown for either trigger - that is the point of it */
+      creply(c, "{\"ok\":true,\"trigger\":\"%s\",\"samples\":%d,"
+                "\"unit\":\"us\",\"p50\":{\"vision\":%ld,\"send\":%ld,"
+                "\"ipc\":%ld,\"queue\":%ld,\"wire\":%ld,\"exec\":%ld,"
+                "\"move\":%ld,\"total\":%ld},\"p95_total\":%ld,"
+                "\"max_total\":%ld}",
+             trig->name, lat_n,
+             lat_pct(offsetof(lat_rec_t, vision), 50),
+             lat_pct(offsetof(lat_rec_t, send), 50),
+             lat_pct(offsetof(lat_rec_t, ipc), 50),
+             lat_pct(offsetof(lat_rec_t, queue), 50),
+             lat_pct(offsetof(lat_rec_t, wire), 50),
+             lat_pct(offsetof(lat_rec_t, exec), 50),
+             lat_pct(offsetof(lat_rec_t, move), 50),
+             lat_pct(offsetof(lat_rec_t, total), 50),
+             lat_pct(offsetof(lat_rec_t, total), 95),
+             lat_pct(offsetof(lat_rec_t, total), 100));
    }
    else if (!strcmp(cmd, "bye"))
    {
@@ -651,7 +877,7 @@ static void handle_line(client_t *c, char *line)
    }
    else
       creply(c, "{\"ok\":false,\"error\":\"unknown command '%s' - try hello, "
-                "scale, dc, state, target, bye\"}", cmd);
+                "scale, dc, state, stats, target, bye\"}", cmd);
 }
 
 static int socket_open(const char *path)
@@ -791,6 +1017,7 @@ static void run_loop(void)
       else if (cfg.simulate) sim_step();   /* the firmware under test moves
                                               during the disconnect, so the
                                               stand-in has to as well */
+      lat_sample();
       trig->cycle();
    }
 }
@@ -828,6 +1055,9 @@ static void usage(void)
       "  --settle-ms=N      disconnect: how long the link stays down\n"
       "  --simulate         no bus; a stand-in slave for testing clients\n"
       "  --explain-al=CODE  read an AL status code aloud and exit\n"
+      "  --latency-log=PATH CSV of the per-step latency breakdown\n"
+      "  --move-step=N      target change big enough to time (default 200)\n"
+      "  --move-eps=N       ANGLEACT change that counts as motion (default 10)\n"
       "\ntriggers:\n", SOCKET_DEFAULT);
    for (t = TRIGGERS; *t; t++)
       fprintf(stderr, "  %-12s %s\n", (*t)->name, (*t)->summary);
@@ -867,6 +1097,11 @@ static int parse_args(int argc, char **argv)
          printf("AL 0x%04x: %s\n", al, al_reading((uint16_t)al));
          exit(0);
       }
+      else if (!strncmp(a, "--latency-log=", 14))  cfg.lat_path = val;
+      else if (!strncmp(a, "--move-step=", 12))
+      { if (int_arg(val, "move-step", 1, 2000, &cfg.move_step)) return 1; }
+      else if (!strncmp(a, "--move-eps=", 11))
+      { if (int_arg(val, "move-eps", 1, 500, &cfg.move_eps)) return 1; }
       else if (!strcmp(a, "--simulate"))         cfg.simulate = 1;
       else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(); exit(0); }
       else
@@ -949,6 +1184,22 @@ int main(int argc, char **argv)
             dc_hasdc, dc_configured, dc_active, dc_pdelay);
    wake_if_asleep();
 
+   if (cfg.lat_path)
+   {
+      lat_log = fopen(cfg.lat_path, "a");
+      if (!lat_log)
+         logf_("WARNING: cannot write %s (%s) - running without a latency log",
+               cfg.lat_path, strerror(errno));
+      else
+      {
+         fprintf(lat_log, "id,trigger,vision_us,send_us,ipc_us,queue_us,"
+                          "wire_us,exec_us,move_us,total_us,moved\n");
+         fflush(lat_log);
+         logf_("latency log: %s (-1 means the stage did not apply)",
+               cfg.lat_path);
+      }
+   }
+
    listen_fd = socket_open(cfg.sock_path);
    if (listen_fd < 0)
    {
@@ -964,6 +1215,7 @@ int main(int argc, char **argv)
    for (i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0) close(clients[i].fd);
    close(listen_fd);
    unlink(cfg.sock_path);
+   if (lat_log) fclose(lat_log);
    bus_close();
    hs_unlock(lock_fd);
    return 0;

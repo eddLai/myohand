@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import hand_client                                          # noqa: E402
+import hand_latency                                         # noqa: E402
 import hand_scale                                           # noqa: E402
 
 fails = 0
@@ -46,6 +47,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--daemon", default=os.path.join(HERE, "handd"))
     ap.add_argument("--socket", default="/tmp/handd_test.sock")
+    ap.add_argument("--latency-log", dest="latency_log",
+                    default="/tmp/handd_test_latency.csv")
     args = ap.parse_args()
 
     if not os.path.exists(args.daemon):
@@ -66,10 +69,13 @@ def main():
     check("an unknown trigger is refused rather than defaulted",
           bad.returncode != 0 and "unknown trigger" in bad.stderr)
 
+    if os.path.exists(args.latency_log):
+        os.unlink(args.latency_log)
     log = open("/tmp/handd_test.log", "w+")
     proc = subprocess.Popen(
         [args.daemon, "--simulate", f"--socket={args.socket}",
-         "--hold-ms=100", "--settle-ms=200"],
+         "--hold-ms=100", "--settle-ms=200",
+         f"--latency-log={args.latency_log}"],
         stdout=log, stderr=subprocess.STDOUT)
     try:
         if not wait_for(lambda: os.path.exists(args.socket), timeout=10):
@@ -130,6 +136,37 @@ def main():
         check("the disconnect trigger really drops the link", saw_down)
         check("the link comes back by itself", saw_up)
         check("a target arriving mid-disconnect is queued, not dropped", queued)
+
+        # the latency ruler has to produce the same columns either way, and
+        # it has to survive a client that sends no stamps at all
+        stamps = hand_latency.Stamps()
+        for pose in ([300] * 4 + [700, 1500], [2000] * 6,
+                     [400] * 4 + [700, 1500], [1900] * 6):
+            stamps.frame()
+            time.sleep(0.03)                      # stand in for the camera
+            stamps.mapped()
+            hand.target(pose, stamps)
+            time.sleep(1.2)                       # let the step play out
+        stats = hand.stats()
+        check("stats reports a breakdown, not just a total",
+              stats["samples"] > 0 and set(hand_latency.STAGES) <=
+              set(stats["p50"]) | {"total"}, str(stats))
+        check("the client-side stages actually arrived",
+              stats["p50"]["vision"] >= 25000, str(stats["p50"]))
+        check("motion onset was timed", stats["p50"]["move"] >= 0,
+              str(stats["p50"]))
+        check("the disconnect trigger's execution stage is timed too",
+              stats["p50"]["exec"] >= 0, str(stats["p50"]))
+
+        rows = hand_latency.read_csv(args.latency_log)
+        stamped = [r for r in rows if r["vision_us"] > 0]
+        check("the latency log is written and parses",
+              len(rows) >= 1 and rows[0]["trigger"] == "disconnect",
+              str(rows[:1]))
+        check("every stamped step is recorded, not just the first",
+              len(stamped) >= 4, f"{len(stamped)} of 4 stamped steps logged")
+        check("stages that do not apply are -1, not zero",
+              all(isinstance(r["vision_us"], int) for r in rows))
 
         # a second client can attach without disturbing the first
         other = hand_client.HandClient(path=args.socket).connect()

@@ -9,17 +9,71 @@ ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`).
 
 | File | Role |
 |---|---|
+| `handd.c` → `handd` | **Resident master.** Holds OPERATIONAL, runs the PDO loop, owns the safety layer, serves a unix socket. Execution trigger is a swappable strategy |
+| `hand_client.py` | Python client for the daemon. Also `python3 hand_client.py state` |
+| `hand_sink.py` | Where teleop's poses go: daemon (streaming), hand_set (per-pose), or nowhere |
+| `hand_scale.py` | The one Python copy of the target scale; checks itself against `hand_ctl scale` |
+| `hand_latency.py` | Client-side stamps for the latency ruler, and a reader for the CSV |
 | `hand_ctl.c` → `hand_ctl` | C core (SOEM): wake → pose → disconnect-execute; JSON telemetry; setcap, no sudo |
 | `hand_api.py` | Python lib + CLI. Gestures: open / fist / middle / point / release |
 | `hand_server.py` | HTTP JSON API bound to `127.0.0.1:8100` only (SSH tunnel in) |
-| `soem_build/hand_set.c` → `hand_set` | Lean pose setter (~2–3 s per pose); teleop sends through this path |
+| `soem_build/hand_set.c` → `hand_set` | Lean pose setter (~2–3 s per pose); the path that predates the daemon |
 | `teleop_app.py` + `run_teleop.sh` | MediaPipe webcam gesture mirroring with a SYNC button UI |
-| `experiments/` | Serial + EtherCAT bring-up probes (protocol archaeology) |
+| `systemd/` | Unit + installer for running the daemon at boot (installs, never enables) |
+| `experiments/` | Serial + EtherCAT bring-up probes (protocol archaeology), `rt_check.sh` |
+
+## The daemon
+
+    ./handd --iface=eth1                     # disconnect trigger (default)
+    ./handd --iface=eth1 --trigger=sync0     # distributed clocks - unproven
+    ./handd --simulate                       # no bus, for working on clients
+    python3 hand_client.py state
+
+One process holds OPERATIONAL instead of paying for it per pose, and the
+safety layer lives inside it, so teleop, an EMG classifier, the HTTP
+server and an ad-hoc script all reach the hand through one socket and
+none of them can route around the guard.
+
+**What makes the firmware execute is still an open question**, so it is a
+strategy rather than an assumption:
+
+| `--trigger` | What it does | Status |
+|---|---|---|
+| `disconnect` | Write, hold, drop the link so the SM watchdog fires, reconnect | **Default. The only path ever observed to drive this hand. Do not delete it.** |
+| `sync0` | Arm distributed clocks; the slave applies its own buffer on the Sync0 interrupt | Written but unproven — DC cannot cross an ethernet switch, so it needs the direct link first |
+
+An unrecognised `--trigger` is an error, never a silent fall back to the
+default: asking for one strategy and measuring another is worse than not
+running at all. `handd --explain-al=0x002d` reads an AL status code aloud,
+and the `dc` command reports clock health live.
+
+### Latency
+
+Eight stages, the same columns for either trigger, so the two can be
+compared on one ruler:
+
+    ./handd --iface=eth1 --latency-log=/tmp/handd.csv
+    python3 hand_latency.py /tmp/handd.csv
+
+`vision` and `send` come from the client's own timestamps, `ipc` / `queue`
+/ `wire` / `exec` / `move` from the daemon, `total` spans the lot. `stats`
+on the socket reports the same live, plus how late each wake-up was.
+
+### Determinism
+
+The board is not PREEMPT_RT, so: `--cpu=3 --rt-prio=80 --lock-memory`.
+Each says in its own log line whether it took effect — do not read jitter
+from a run that printed a WARNING. `./experiments/rt_check.sh` reports
+what else is in the way. Measured on the KD240 at 1 kHz, worst-case
+wake-up lateness under six busy loops: **3052 µs untuned, 121 µs tuned**.
 
 ## Quick use
 
     ./hand_ctl state                      # telemetry, no motion
-    python3 hand_api.py open              # gestures from CLI
+    ./hand_ctl scale                      # what the target numbers mean, no bus
+    ./handd --iface=eth1 &                # resident master
+    python3 hand_client.py state          # talk to it
+    python3 hand_api.py open              # gestures from CLI (per-pose path)
     ./run_teleop.sh                       # webcam teleop (SYNC button; SPACE/A/Q keys)
     python3 hand_server.py &              # REST for other projects:
     #   ssh -L 8100:127.0.0.1:8100 eddlai@120.126.83.28
@@ -52,21 +106,46 @@ draws two readings: the amber fill is the pose that was asked for, the pale tick
 is where the hand reported it got to. They separate whenever a guard clamps or
 an axis stalls.
 
-Because a pose costs the hand two to three seconds, AUTO sync waits for the
-pose to **settle** - five consecutive frames within 120 units - before sending,
-so the hand mirrors what the operator meant to hold rather than a posture that
-merely passed by. The window shows MOVING / SETTLED / SENDING accordingly.
+Where the poses go is `--sink`:
+
+| `--sink` | Behaviour |
+|---|---|
+| `daemon` (default) | Stream the latest pose into `handd` at `--rate` Hz. Continuous following |
+| `hand_set` | One subprocess per pose. Slow by construction, and the only path measured to drive the hand |
+| `none` | Dry run. Camera, mapping and window with no hand and no daemon |
+
+The settle gate — wait for five frames within 120 units before sending —
+existed only because a pose cost two to three seconds. It is
+`--settle-frames` now and defaults to **off** for the daemon sink, because
+waiting for the operator to hold still is the opposite of following them.
+`--headless --max-frames=N` runs the whole chain over SSH with no display.
+
+### Calibration profiles
+
+`calibration.json` holds **named profiles** and an `active` pointer, because
+those windows are measured data and the CALIBRATE button used to overwrite
+them. A save always lands under a new name and makes it active; the old one
+stays. `python3 hand_mapping.py` lists them, `--profile NAME` picks one.
 
 ## Axis order and semantics (F1, reverse-engineered)
 
 Order: `[pinky, ring, middle, index, thumb_bend, thumb_rot]`.
-Targets: `0` = closed, `2000` = open, `-1` = leave unchanged.
+Targets: `0` = closed, `2000` = open, `-1` = leave unchanged — **probably**.
+`hand_ctl scale` is the authority; see the note under Safety for why that
+sentence has a "probably" in it.
 
-The firmware executes a pose only AFTER the master disconnects, so each
-pose call ends by closing the session: `hand_ctl` takes ~10–20 s (wake
-wiggle and telemetry included) and `hand_set` takes ~2–3 s. Teleop
-therefore updates at roughly one pose every 2–3 s until vendor docs
-reveal the realtime execution trigger.
+The firmware appears to execute a pose only AFTER the master disconnects.
+Held in OPERATIONAL at 1 kHz for ten and a half seconds, the hand did not
+move and drew 0 mA the whole time; it moved after the link dropped. But
+that test ran with distributed clocks never configured and the hand behind
+a lab switch, and DC cannot cross a switch — so the finding is real and
+its cause is not settled. The decisive experiment is one cable move away
+and is described in the ExoPulse_docs vault under `Persistent_OP_Probe`.
+
+Per-pose costs on the old path: `hand_ctl` ~10–20 s including the wake
+wiggle and telemetry, `hand_set` ~2–3 s. Most of that is process startup
+and conservative waiting rather than the protocol, which is what `handd`
+removes.
 
 ## Safety
 
@@ -90,11 +169,35 @@ the mechanism:
 
 Guards clamp rather than reject, so a streaming teleop source degrades to
 a safe pose instead of failing. `hand_ctl` reports what it changed in
-`guarded` / `guard_note`. Offline checks: `make test && ./test_safety`.
+`guarded` / `guard_note`.
+
+**The target scale is defined once**, in `hand_safety.h` — `hs_clamp_target`,
+`hs_target_valid`, `hs_ang_to_target`, `hs_target_to_ang`. Nothing else in
+the C tree divides by the span or clamps against a literal 0/2000, because
+whether the command field really is `0..2000` rather than an ANGLEACT-style
+`890..1850` is **still unresolved** and settling it needs the hand. Python
+mirrors it in `hand_scale.py` and verifies itself against `hand_ctl scale`.
+
+Offline checks, none of which need hardware:
+
+    make test && ./test_safety        # 16 interlock and scale checks
+    python3 test_scale.py             # C and Python agree on the scale
+    python3 test_daemon.py            # the daemon, against a simulated slave
+    python3 test_teleop_sink.py       # the streaming client path
+    python3 test_calibration.py       # profiles cannot be clobbered
+    python3 test_mapping.py           # the mapping is viewpoint-invariant
+    python3 test_ui_render.py         # the panel draws, with no display
 
 ## Build and setup (from a clean clone)
 
     ./setup.sh                            # one-shot: venv, clones, cmake, make, cap
+
+⚠️ **Not on the KD240** — `setup.sh` refuses to run on aarch64. The board has
+1.9 GB of RAM and no swap, and pip building a vision wheel from source OOMs
+it. There, build the C side only:
+
+    export PATH="$HOME/rh56f1_kd240/ethercat/buildenv/bin:$PATH"   # cmake >= 3.28
+    make all && make cap
 
 Or step by step:
 
@@ -108,5 +211,16 @@ Or step by step:
 ## Known limits
 
 The 24V/3A PSU handles gestures but sits under the hand's 5 A peak-grip
-spec. Realtime streaming control and thumb force-sensor calibration
-await vendor F1 documentation.
+spec. Thumb force-sensor calibration awaits vendor F1 documentation.
+
+`fist` does not reach a grip: the four fingers only travel from ANGLEACT
+~1790 to ~1730 rather than into the closed band below 1000. The same
+symptom was solved once before by raising force and speed to 1000, and
+`hand_api.pose()` defaults to 500/800 — but making an unattended hand
+squeeze harder needs somebody standing next to it, so it is untested.
+
+MediaPipe pins XNNPACK to a single thread and will not let you change it,
+so the teleop chain runs at **3.9 FPS on the board** when it is
+re-detecting (measured 2026-08-06, 320×240, no hand in frame). Tracking is
+faster. Getting past that means building the palm→landmark pipeline
+directly on `ai-edge-litert`, where the thread count is yours.

@@ -154,6 +154,12 @@ def build_parser():
     ap.add_argument("--profile", default=None,
                     help="calibration profile to use; default is the active "
                          "one (python3 hand_mapping.py lists them)")
+    ap.add_argument("--headless", action="store_true",
+                    help="run the camera, mapping and sink with no window. "
+                         "The whole vision chain over SSH, no display needed.")
+    ap.add_argument("--max-frames", type=int, default=0,
+                    help="stop after N frames and print a summary; 0 = run "
+                         "until q")
     return ap
 
 
@@ -197,15 +203,22 @@ def main():
                                      min_tracking_confidence=0.5)
     draw, styles = mp.solutions.drawing_utils, mp.solutions.drawing_styles
     win = "RH56F1 Hand Teleop"
-    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(win, args.width + 160, args.height + 90)
-    cv2.moveWindow(win, 40, 60)
-    cv2.setMouseCallback(win, on_mouse)
+    if not args.headless:
+        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(win, args.width + 160, args.height + 90)
+        cv2.moveWindow(win, 40, 60)
+        cv2.setMouseCallback(win, on_mouse)
+    else:
+        # AUTO with no window to click: headless is for exercising the chain
+        # end to end, and a run that never sends is not exercising it.
+        auto_sync = True
 
     ema = None
     quiet = 0
     fps_t, fps = time.time(), 0.0
     stamps = hand_latency.Stamps()
+    frames = seen = 0
+    t_start = time.time()
 
     while True:
         if SETTINGS["device"] != opened_device:     # follow the settings plate
@@ -219,6 +232,7 @@ def main():
             time.sleep(0.05)
             continue
         stamps.frame()          # the latency ruler starts at the frame
+        frames += 1
         frame = cv2.flip(frame, 1)
         res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         tgt = None
@@ -246,6 +260,7 @@ def main():
             moved = max(abs(a - b) for a, b in zip(ema, raw))
             quiet = quiet + 1 if moved < SETTLE_TOL else 0
             tgt = ema[:]
+            seen += 1
             stamps.mapped()     # targets are ready; the rest is the daemon's
         else:
             quiet = 0
@@ -313,6 +328,10 @@ def main():
             last_sent = tgt[:]
             send_pose(tgt, stamps)
 
+        if args.max_frames and frames >= args.max_frames:
+            break
+        if args.headless:
+            continue
         cv2.imshow(win, frame)
         k = cv2.waitKey(1) & 0xFF
         if k in (ord("q"), 27):
@@ -330,7 +349,12 @@ def main():
             show_settings = not show_settings
 
     cap.release()
-    cv2.destroyAllWindows()
+    if not args.headless:
+        cv2.destroyAllWindows()
+    dt = max(time.time() - t_start, 1e-6)
+    print(f"{frames} frames in {dt:.1f}s = {frames / dt:.1f} FPS; "
+          f"a hand was in {seen} of them ({100.0 * seen / max(frames, 1):.0f}%); "
+          f"{sink.sent} pose(s) reached the {sink.name} sink")
     sink.close()
     return 0
 

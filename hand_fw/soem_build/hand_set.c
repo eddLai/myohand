@@ -43,7 +43,7 @@ int main(int argc, char **argv)
    char why[256] = {0};
    int force = 500, speed = 1000;
    if (argc < 7) {
-      printf("usage: hand_set p r m i tb tr [force] [speed]  (0-2000, -1=hold)\n");
+      printf("usage: hand_set p r m i tb tr [force] [speed]  (890-1850 ANGLEACT, -1=hold)\n");
       return 1;
    }
    /* clamp rather than reject: hand_set is the streaming path, and a

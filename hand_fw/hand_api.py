@@ -1,4 +1,4 @@
-"""inspire_hand.hand_api - Python API for the Inspire RH56F1 dexterous hand.
+"""hand_fw.hand_api - Python API for the Inspire RH56F1 dexterous hand.
 
 Axis order everywhere: [pinky, ring, middle, index, thumb_bend, thumb_rot]
 Targets are ANGLEACT counts: ~890 = fully closed, ~1850 = fully open,

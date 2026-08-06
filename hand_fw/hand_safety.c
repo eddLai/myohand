@@ -1,4 +1,5 @@
 #include "hand_safety.h"
+#include "hand_collision_table.h"
 
 #include <fcntl.h>
 #include <stdarg.h>
@@ -125,9 +126,27 @@ static int eff_of(const int16_t *tgt, const int16_t *ang, int i)
    return tgt[i] != HS_TGT_HOLD ? tgt[i] : hs_ang_to_target(ang[i]);
 }
 
+/* max over the 2x2 table cells enclosing the query point: the tables
+   are deliberately not monotone (half-curled fingers block the thumb
+   more than fully curled ones), so a single floor cell is not safe */
+static int hct_lookup(const int16_t tab[HCT_N][HCT_N], int p, int s)
+{
+   int i0 = clampi(p / HCT_STEP, 0, HCT_N - 1);
+   int j0 = clampi(s / HCT_STEP, 0, HCT_N - 1);
+   int i1 = i0 + 1 < HCT_N ? i0 + 1 : i0;
+   int j1 = j0 + 1 < HCT_N ? j0 + 1 : j0;
+   int m = tab[i0][j0];
+   if (tab[i0][j1] > m) m = tab[i0][j1];
+   if (tab[i1][j0] > m) m = tab[i1][j0];
+   if (tab[i1][j1] > m) m = tab[i1][j1];
+   return m < 2000 ? m : 2000;   /* 2050 sentinel: nothing safe here,
+                                    demand the rail and let the other
+                                    axis clamp lift the pose clear */
+}
+
 int hs_interlock(int16_t *tgt, const int16_t *ang, char *why, size_t n)
 {
-   int fixed = 0, i, idx, thb, rot;
+   int fixed = 0, i, idx, thb, rot, pass;
 
    for (i = 0; i < 6; i++) tgt[i] = hs_clamp_target(tgt[i]);
 
@@ -150,6 +169,43 @@ int hs_interlock(int16_t *tgt, const int16_t *ang, char *why, size_t n)
       note(why, n, "thumb_rot held at %d (curled index blocks the sweep)",
            ROT_SAFE);
       fixed++;
+   }
+
+   /* geometry tables from the vendor STEP scan, anchor-calibrated to
+      the on-hand observations. They mostly agree with the empirical
+      rules above (nothing to add at f >= 600) but are stricter in the
+      half-curled low-rotation pocket the scalar rules miss. The rules
+      above stay as the floor until an on-hand boundary replay
+      validates the tables on their own. Iterated to the fixed point:
+      clamps only ever raise targets, so this terminates. */
+   for (pass = 0; pass < 8; pass++)
+   {
+      int md = eff_of(tgt, ang, AX_MIDDLE);
+      int f, want, changed = 0;
+      idx = eff_of(tgt, ang, AX_INDEX);
+      f = idx < md ? idx : md;
+      thb = eff_of(tgt, ang, AX_THUMB_BEND);
+      rot = eff_of(tgt, ang, AX_THUMB_ROT);
+      want = hct_lookup(hct_tb_min, f, rot);
+      if (thb < want)
+      {
+         tgt[AX_THUMB_BEND] = (int16_t)want;
+         note(why, n, "thumb_bend raised to %d (geometry: f=%d rot=%d)",
+              want, f, rot);
+         fixed++;
+         changed++;
+         thb = want;
+      }
+      want = hct_lookup(hct_rot_min, f, thb);
+      if (rot < want)
+      {
+         tgt[AX_THUMB_ROT] = (int16_t)want;
+         note(why, n, "thumb_rot raised to %d (geometry: f=%d tb=%d)",
+              want, f, thb);
+         fixed++;
+         changed++;
+      }
+      if (!changed) break;
    }
    return fixed;
 }

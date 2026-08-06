@@ -89,7 +89,7 @@ trap cleanup EXIT
 
 pick_python() {
     if [ -n "${TELEOP_PYTHON:-}" ]; then echo "$TELEOP_PYTHON"; return; fi
-    for p in "./venv/bin/python3" "$HOME/inspire_hand/venv/bin/python3"; do
+    for p in "../venv/bin/python3" "$HOME/myohand/venv/bin/python3"; do
         [ -x "$p" ] && { echo "$p"; return; }
     done
     command -v python3
@@ -107,9 +107,9 @@ fi
 if daemon_answers; then
     echo "run_teleop: using the handd already on $SOCK (leaving it running)" >&2
 elif [ -n "$IFACE" ]; then
-    [ -x ./handd ] || { echo "./handd is not built - run: make handd && sudo make cap" >&2; exit 1; }
+    [ -x ../hand_fw/handd ] || { echo "../hand_fw/handd is not built - run: make -C ../hand_fw handd && sudo make -C ../hand_fw cap" >&2; exit 1; }
     echo "run_teleop: starting handd on $IFACE" >&2
-    ./handd --iface="$IFACE" --socket="$SOCK" &
+    ../hand_fw/handd --iface="$IFACE" --socket="$SOCK" &
     DAEMON_PID=$!
     for _ in $(seq 1 100); do
         daemon_answers && break

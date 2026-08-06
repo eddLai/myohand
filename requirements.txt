@@ -1,7 +1,9 @@
-# EMG 端（emg/）的相依。inspire_hand/ 有自己的 requirements.txt。
+# One venv for the whole repo: emg/ (Myo armband) and camera/+teleop/
+# (MediaPipe teleop). The control stack itself (hand_ctl, hand_set, handd)
+# is C and needs none of this.
 #
-# 必須用 Python 3.11：libemg 要 numpy<2，而 numpy<2 沒有出 cp313 wheel。
-# 這台 Intel Mac 上已驗證可用的組合寫在下面。
+# Must be Python 3.11: libemg needs numpy<2, and numpy<2 has no cp313
+# wheel. The combination below is verified working on an Intel Mac.
 
 numpy==1.26.4
 pandas
@@ -19,3 +21,19 @@ numba==0.62.1
 #
 # 用 -e 的話，從 repo 根目錄執行時 `import libemg` 會解析到 submodule 的外層目錄
 # 變成 namespace package（__file__ is None），凡是用到套件相對路徑的功能都會壞。
+
+# mediapipe is pinned, and the upper bound matters as much as the lower.
+# The lower one is aarch64: PyPI's newest aarch64 wheel is 0.10.18 and the
+# KD240 is aarch64, so 0.10.21 made the board try to build from source and
+# die on 1.9 GB of RAM with no swap. The upper one is the API: this range
+# used to read <0.11, which pip happily satisfied with 0.10.35 on x86 -
+# and 0.10.35 has dropped the legacy `mp.solutions` namespace that
+# teleop_app.py uses, so it installs cleanly and then fails at the first
+# frame with "module 'mediapipe' has no attribute 'solutions'". Found on
+# .112 on 2026-08-06. 0.10.18 is also the version the board was measured
+# on (35.8 ms tracking, 27.9 FPS with four threads) and the one
+# test_mapping.py checks the mapping against.
+mediapipe==0.10.18
+opencv-python>=4.10,<5
+pysoem
+cmake

@@ -1,4 +1,4 @@
-# inspire_hand — RH56F1-E4R-T1 EtherCAT Control API
+# hand_fw — RH56F1-E4R-T1 EtherCAT Control API
 
 Standalone control stack for the Inspire RH56F1 dexterous hand over
 EtherCAT. It has been driven from three hosts and the NIC is different on
@@ -22,9 +22,12 @@ live in the ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`).
 | `hand_api.py` | Python lib + CLI. Gestures: open / fist / middle / point / release |
 | `hand_server.py` | HTTP JSON API bound to `127.0.0.1:8100` only (SSH tunnel in) |
 | `soem_build/hand_set.c` → `hand_set` | Lean pose setter (~2–3 s per pose); the path that predates the daemon |
-| `teleop_app.py` + `run_teleop.sh` | MediaPipe webcam gesture mirroring with a SYNC button UI |
+| `../teleop/teleop_app.py` + `../teleop/run_teleop.sh` | MediaPipe webcam gesture mirroring with a SYNC button UI |
 | `systemd/` | Unit + installer for running the daemon at boot (installs, never enables) |
 | `experiments/` | Serial + EtherCAT bring-up probes (protocol archaeology), `rt_check.sh`, and the 2026-08-06 instruments: `ecat_scan`, `ecat_interrogate`, `sii_dump`, `coe_startup`, `dc_check`, `compliant_op`, `op_execute_hunt`, `watchdog_trigger`, `wd_pace`, `syncmode_test`, `rate_sweep`, `ecat_persistent_probe`. `make probe && sudo make cap-probe` builds them; raw output in `results_2026-08-06/` |
+| `hand_pid.py` | Slow outer-loop trim: per-shot integral correction from ANGLEACT readback (pure corrector, wire into your own send path) |
+| `geometry/` | Offline STEP pipeline that generates `hand_collision_table.h` |
+| `hand_collision_table.h` | GENERATED thumb-vs-finger minimum-target tables (do not edit) |
 
 ## The daemon
 
@@ -88,7 +91,7 @@ bound what a 2 ms loop has to survive.
     ./handd --iface=eth1 &                # resident master
     python3 hand_client.py state          # talk to it
     python3 hand_api.py open              # gestures from CLI (per-pose path)
-    ./run_teleop.sh                       # webcam teleop (SYNC button; SPACE/A/Q keys)
+    ../teleop/run_teleop.sh                       # webcam teleop (SYNC button; SPACE/A/Q keys)
     python3 hand_server.py &              # REST for other projects:
     #   ssh -L 8100:127.0.0.1:8100 eddlai@120.126.83.28
     #   curl -X POST http://127.0.0.1:8100/gesture/open
@@ -129,7 +132,7 @@ mapping to `handd` to the hand, operator waves, hand follows.
 
     # everything in one terminal: starts handd, runs teleop, and stops the
     # daemon again when teleop exits - Ctrl+C included
-    ./run_teleop.sh --iface=enp17s0 --device=0
+    ../teleop/run_teleop.sh --iface=enp17s0 --device=0
 
 or the same thing in pieces, when you want the daemon to outlive the
 window:
@@ -141,7 +144,7 @@ window:
     python3 verify_following.py
 
     # 3. the vision half
-    ./run_teleop.sh --device=0        # sees the daemon, leaves it running
+    ../teleop/run_teleop.sh --device=0        # sees the daemon, leaves it running
 
 Click **SYNC** in the window; nothing is sent until you do, and the rail
 says so ("Ready - press space to send this pose"). **OPEN HAND** sends
@@ -162,12 +165,12 @@ and a hand left mid-motion.
 
 | Entry point | On interrupt |
 |---|---|
-| `teleop_app.py` | SIGINT/SIGTERM set a flag the loop checks; camera and sink released in a `finally` |
+| `../teleop/teleop_app.py` | SIGINT/SIGTERM set a flag the loop checks; camera and sink released in a `finally` |
 | `handd` | SIGINT/SIGTERM/SIGHUP; unlinks its socket, drops the bus lock, leaves the hand parked |
 | `hand_server.py` | `shutdown()` lets in-flight requests finish, then `server_close()` and releases the hand |
 | `verify_following.py` | parks the axis it was sweeping instead of leaving it chasing a sine |
 | `HandSetSink` | `close()` stops the `hand_set` it spawned — an orphan would keep the bus lock |
-| `run_teleop.sh` | one EXIT trap stops teleop first, then the daemon, but only one it started |
+| `../teleop/run_teleop.sh` | one EXIT trap stops teleop first, then the daemon, but only one it started |
 | `InspireHand` | usable as `with InspireHand() as hand:` |
 
 teleop was the one that actually broke: it handled no signals, and
@@ -176,7 +179,7 @@ never takes. A wrapper cannot fix that from outside — an OpenCV read does
 not reliably hand control back to Python in time for a handler, so the
 flag has to be checked by the loop itself.
 
-`run_teleop.sh` only stops a daemon it started itself. If one is already
+`../teleop/run_teleop.sh` only stops a daemon it started itself. If one is already
 answering it says so and leaves it alone, because killing something
 another window is driving would be the worse surprise. `handd` shuts down
 cleanly on SIGINT, SIGTERM and SIGHUP, so Ctrl+C and closing the terminal
@@ -212,17 +215,17 @@ is the motor.
 
 ## Gesture teleop
 
-`run_teleop.sh` opens the webcam window with a SYNC button; `hand_mapping.py`
+`../teleop/run_teleop.sh` opens the webcam window with a SYNC button; `../camera/hand_mapping.py`
 turns the skeleton into targets.
 
 Flexion is scored as **joint angles on MediaPipe's world landmarks**, not as
 distance ratios over the projected image. Angles between bones do not change
 when the hand rotates in front of the camera, so the same fist reports the same
-targets from any viewpoint. `test_mapping.py` views a synthetic hand from 45
+targets from any viewpoint. `../camera/test_mapping.py` views a synthetic hand from 45
 orientations and measures the wander: 0 target units for the joint-angle
 mapping, up to 1700 (the entire travel) for the distance-ratio one it replaced.
 
-The window itself is an instrument panel (`teleop_ui.py`), built for an
+The window itself is an instrument panel (`../teleop/teleop_ui.py`), built for an
 operator whose eyes are on their own hand: one large line says what to do next
 ("Hold still", "Ready", "Hand moving"), and a schematic of the right hand shows
 the commanded posture, thumb included - that thumb swings with the rotation
@@ -253,7 +256,7 @@ waiting for the operator to hold still is the opposite of following them.
 
 ### Calibration profiles
 
-`calibration.json` holds **named profiles** and an `active` pointer, because
+`../camera/calibration.json` holds **named profiles** and an `active` pointer, because
 those windows are measured data and the CALIBRATE button used to overwrite
 them. A save always lands under a new name and makes it active; the old one
 stays. `python3 hand_mapping.py` lists them, `--profile NAME` picks one.
@@ -350,6 +353,11 @@ the mechanism:
   written (a stall observed at 1.1 A / 58 C motivated this).
 - **per-axis profile**: thumb-bend gets a force limit above its
   1300-1857 g phantom reading, plus a lower speed to offset the headroom.
+- **geometry tables**: `hand_collision_table.h`, generated from the vendor
+  STEP scan, additionally clamps the thumb against a half-curled
+  low-rotation pocket the scalar rules above miss. Runs after them, on
+  the same targets, converted to the table's own scale at the call site
+  (see Geometry collision tables below) — the scalar rules stay the floor.
 - **bus lock**: `flock` serializes masters, since two on one NIC make the
   slave refuse OPERATIONAL.
 - range clamp 890..1850 (the mechanism's travel — a command below the
@@ -371,19 +379,20 @@ constants that were positions on the old scale. Python mirrors it in
 
 Offline checks, none of which need hardware:
 
-    make test && ./test_safety        # 16 interlock and scale checks
+    make test && ./test_safety        # 22 interlock, scale and geometry checks
     python3 test_scale.py             # C and Python agree on the scale
+    python3 test_pid.py               # the closed-loop trim, against a plant stub
     python3 test_daemon.py            # the daemon, against a simulated slave
     python3 test_teleop_sink.py       # the streaming client path
     python3 test_calibration.py       # profiles cannot be clobbered
-    python3 test_mapping.py           # the mapping is viewpoint-invariant
+    python3 ../camera/test_mapping.py # the mapping is viewpoint-invariant
     python3 test_ui_render.py         # the panel draws, with no display
     python3 test_api_compat.py        # both paths present the same API
     python3 test_release.py           # interrupting anything frees what it held
 
 ## Build and setup (from a clean clone)
 
-    ./setup.sh                            # one-shot: venv, clones, cmake, make, cap
+    ../setup.sh                           # one-shot at repo root: venv, SOEM, cmake, make, cap
 
 ⚠️ **Not on the KD240** — `setup.sh` refuses to run on aarch64. The board has
 1.9 GB of RAM and no swap, and pip building a vision wheel from source OOMs
@@ -392,14 +401,15 @@ it. There, build the C side only:
     export PATH="$HOME/rh56f1_kd240/ethercat/buildenv/bin:$PATH"   # cmake >= 3.28
     make all && make cap
 
-Or step by step:
+Or step by step (from the repo root):
 
     python3 -m venv venv && venv/bin/pip install -r requirements.txt
-    git clone https://github.com/OpenEtherCATsociety/SOEM.git soem_build/SOEM
-    git clone https://github.com/Kazuhito00/hand-gesture-recognition-using-mediapipe.git
-    cmake -S soem_build/SOEM -B soem_build/build
-    cmake --build soem_build/build -j4
-    make all && make cap                  # cap needs sudo once per rebuild
+    git clone https://github.com/OpenEtherCATsociety/SOEM.git hand_fw/soem_build/SOEM
+    cmake -S hand_fw/soem_build/SOEM -B hand_fw/soem_build/build
+    cmake --build hand_fw/soem_build/build -j4
+    make -C hand_fw all && make -C hand_fw cap   # cap needs sudo once per rebuild;
+                                                 # hand_set.c finds hand_safety.h via -I .,
+                                                 # so always build with make -C hand_fw
 
 ## Known limits
 
@@ -421,3 +431,45 @@ so the teleop chain runs at **3.9 FPS on the board** when it is
 re-detecting (measured 2026-08-06, 320×240, no hand in frame). Tracking is
 faster. Getting past that means building the palm→landmark pipeline
 directly on `ai-edge-litert`, where the thread count is yours.
+
+
+## Closed-loop trim (hand_pid.py)
+
+The firmware executes a pose only after the master disconnects (2-3 s a
+shot, no feedback while it runs), so a realtime PID is impossible; what
+works is a per-shot integral trim. `HandPID.correct(req, ang_act)`
+returns the biased targets for the next shot - held (-1) axes pass
+through untouched, the integrator freezes in the deadband / on rails /
+on STA 5-6-7, and resets when the target jumps. `req` and `ang_act` are
+both ANGLEACT counts (see `hand_scale`), the same scale `handd`/`hand_ctl`/
+`hand_set` speak - the module does not rescale between them. The
+corrected targets still go through hand_safety inside hand_ctl/hand_set,
+so the trim can never bypass the interlock. Offline tests: `python3
+test_pid.py` (73 checks; convergence needs at most 3 corrected shots
+over a +-10% gain and an offset plant).
+
+## Geometry collision tables (hand_collision_table.h)
+
+Generated from the vendor right-hand STEP model (`geometry/`, see
+`geometry/README.md`). The tables agree with the empirical interlock
+about the f>=600 world (no restriction) and are stricter in the
+half-curled low-rotation pocket the scalar rules miss (thumb_bend floors
+up to 1250). The scalar rules in `hand_safety.c` REMAIN as the floor: the
+model was calibrated on 15 anchor poses with millimetre margins, so only
+an on-hand boundary replay (conservative force/speed, poses stepped just
+outside the table boundary) may retire them.
+
+The table itself is generated on the mechanism's old, abstract 0..2000
+target scale (see its own header comment) - it predates the 2026-08-06
+correction that made a target an ANGLEACT count. `hs_interlock()` in
+`hand_safety.c` converts at the boundary (`to_hct_scale`/`from_hct_scale`)
+rather than regenerate the table, using the same old<->new mapping
+documented in `hand_safety.h`. Regenerating after any calibration change
+still targets the old scale:
+
+    geometry/venv-geo/bin/python geometry/sample_collisions.py \
+        geometry/links.yaml <mesh_dir> <cylinders.json> <grid.npz>
+    geometry/venv-geo/bin/python geometry/build_tables.py \
+        <grid.npz> geometry/links.yaml hand_collision_table.h
+
+`build_tables` refuses to write the header unless the anchor gates pass.

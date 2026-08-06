@@ -7,6 +7,30 @@ __pycache__/
 .ipynb_checkpoints/
 venv/
 .venv/
+*.log
+*.o
 
 # macOS
 .DS_Store
+
+# runtime state written by the apps (per-operator, not source)
+camera/calibration.json
+teleop/teleop_settings.json
+
+# built binaries and vendor clones
+hand_fw/hand_ctl
+hand_fw/handd
+hand_fw/test_safety
+hand_fw/soem_build/SOEM/
+hand_fw/soem_build/build/
+hand_fw/soem_build/hand_set
+hand_fw/soem_build/hand_op*
+hand_fw/soem_build/hand_open*
+hand_fw/soem_build/hand_wake
+hand_fw/experiments/ecat_scan
+hand_fw/experiments/ecat_persistent_probe
+dist/
+# geometry pipeline (venv + vendor CAD stays out of the public repo)
+hand_fw/geometry/venv-geo/
+hand_fw/geometry/__pycache__/
+hand_fw/*.rar

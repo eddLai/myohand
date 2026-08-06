@@ -4,10 +4,19 @@
 UI (English):
   [SYNC] button (click)  - toggle AUTO sync to robot hand
   SPACE - send current pose once      A - toggle AUTO sync
-  Q/ESC - quit
+  C - toggle calibration              Q/ESC - quit
+
+The window opens even when the camera is missing: a dead camera leaves
+the panel on a placeholder and retries in the background, or switch
+device in SETTINGS. Whether the hand itself is reachable is reported by
+the sink (see --sink below) rather than a separate probe.
 
 Targets come from joint angles on MediaPipe's world landmarks, so a
-rotated hand still reports the pose it is actually holding.
+rotated hand still reports the pose it is actually holding. A trust gate
+(hand_mapping.thumb_trust) holds the two thumb axes at their last
+believed pose on frames where MediaPipe is guessing rather than seeing -
+edge-on to the camera, mid-flip on the handedness label, or the thumb
+drawn from behind the palm.
 
 Where those targets go is a choice now, not a constant:
 
@@ -30,8 +39,13 @@ still is the opposite of following them.
 import argparse, json, os, signal, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "camera")))
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "hand_fw")))
 
 import cv2
+import numpy as np
 import mediapipe as mp
 
 import hand_latency
@@ -53,12 +67,14 @@ stop = False               # set by SIGINT/SIGTERM; the loop checks it
 sink = None                # where poses go; see hand_sink.open_sink
 settle_frames = 5          # 0 disables the gate entirely
 auto_sync = False
+CAM_RETRY = 3.0            # seconds between reopen attempts while offline
 last_sent = None
 cal = None                 # {feature: [min, max]} while calibrating
 cal_note = ""
 cal_grew = 0.0             # when the range last got bigger
+cal_labels = None          # handedness votes while calibrating
 CAL_QUIET = 4.0            # save once no new extreme has shown up for this long
-CAL_NEED = {"curl_hi": 40, "abd": 15}   # the spread a usable window needs
+CAL_NEED = {"curl_hi": 40, "opp": 40}   # the spread a usable window needs
 PARK = [hm.T_MAX] * 6      # every joint open - the pose to leave the hand in
 show_settings = False
 SET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teleop_settings.json")
@@ -111,9 +127,10 @@ def toggle_calibration():
     windows if they actually moved far enough to define one. Calibration
     also closes itself: both hands are busy demonstrating the range, so
     asking for a second click is asking for the one thing they cannot do."""
-    global cal, cal_note, cal_grew
+    global cal, cal_note, cal_grew, cal_labels
     if cal is None:
         cal, cal_note, cal_grew = {}, "move through your full range", time.time()
+        cal_labels = {}
         return
     if cal_missing(cal):
         cal, cal_note = None, "range too small - discarded"
@@ -121,14 +138,19 @@ def toggle_calibration():
     # A new profile every time. The measured windows already in the file
     # are data, not settings, and a stray click on a badly lit day must
     # not be able to land on top of them.
-    name = hm.save_calibration({
+    data = {
         "CURL_OPEN": round(cal["curl_lo"][0], 1),
         "CURL_CLOSED": round(cal["curl_hi"][1], 1),
         "THUMB_OPEN": round(cal["thumb"][0], 1),
         "THUMB_CLOSED": round(cal["thumb"][1], 1),
-        "ABD_MIN": round(cal["abd"][0], 1),
-        "ABD_MAX": round(cal["abd"][1], 1),
-    })
+        "OPP_MIN": round(cal["opp"][0], 1),
+        "OPP_MAX": round(cal["opp"][1], 1),
+    }
+    if cal_labels:
+        # lock in whichever hand MediaPipe saw during the demonstration,
+        # so every later frame that disagrees is known to be a flip
+        data["HANDEDNESS"] = max(cal_labels, key=cal_labels.get)
+    name = hm.save_calibration(data)
     cal, cal_note = None, f"saved as profile {name}"
 
 
@@ -218,14 +240,19 @@ def main():
           f"deadband={sink.deadband}"
           + (f"  rate={args.rate:g} Hz" if sink.name == "daemon" else ""))
 
+    def open_camera(device):
+        c = cv2.VideoCapture(device)
+        c.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+        c.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+        return c
+
     SETTINGS["device"] = args.device if args.device != 4 else SETTINGS["device"]
     try:
         signal.signal(signal.SIGINT, on_signal)
         signal.signal(signal.SIGTERM, on_signal)
-        cap = cv2.VideoCapture(SETTINGS["device"])
+        cap = open_camera(SETTINGS["device"])
         opened_device = SETTINGS["device"]
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+        cam_try = time.time()
         hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
                                          min_detection_confidence=0.6,
                                          min_tracking_confidence=0.5)
@@ -251,26 +278,39 @@ def main():
         while not stop:
             if SETTINGS["device"] != opened_device:     # follow the settings plate
                 cap.release()
-                cap = cv2.VideoCapture(SETTINGS["device"])
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+                cap = open_camera(SETTINGS["device"])
                 opened_device, ema = SETTINGS["device"], None
             ok, frame = cap.read()
             if not ok:
-                time.sleep(0.05)
-                continue
-            stamps.frame()          # the latency ruler starts at the frame
-            frames += 1
-            frame = cv2.flip(frame, 1)
-            res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                # a dead camera must not take the panel with it: the hand-side
+                # buttons keep working over a placeholder while we retry behind
+                if time.time() - cam_try > CAM_RETRY:
+                    cam_try = time.time()
+                    cap.release()
+                    cap = open_camera(SETTINGS["device"])
+                frame = np.zeros((args.height, args.width, 3), np.uint8)
+                res = None
+                time.sleep(0.03)
+            else:
+                cam_try = time.time()
+                stamps.frame()          # the latency ruler starts at the frame
+                frames += 1
+                frame = cv2.flip(frame, 1)
+                res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             tgt = None
 
-            if res.multi_hand_landmarks and res.multi_hand_world_landmarks:
+            trust, why = True, ""
+            if res and res.multi_hand_landmarks and res.multi_hand_world_landmarks:
                 draw.draw_landmarks(frame, res.multi_hand_landmarks[0],
                                     mp.solutions.hands.HAND_CONNECTIONS,
                                     styles.get_default_hand_landmarks_style(),
                                     styles.get_default_hand_connections_style())
+                label = res.multi_handedness[0].classification[0]
+                trust, why = hm.thumb_trust(res.multi_hand_landmarks[0].landmark,
+                                            label.label, label.score)
                 raw = hm.pose_from_world_landmarks(res.multi_hand_world_landmarks[0].landmark)
+                if ema is not None and not trust:
+                    raw[4:] = ema[4:]   # MediaPipe is guessing: hold the thumb
                 if ema is None:
                     ema = raw[:]
                 else:
@@ -278,7 +318,12 @@ def main():
                     ema = [int(w * e + (1 - w) * r) for e, r in zip(ema, raw)]
                 if cal is not None:
                     grew = False
-                    for k, v in hm.raw_features(res.multi_hand_world_landmarks[0].landmark).items():
+                    cal_labels[label.label] = cal_labels.get(label.label, 0) + 1
+                    feats = hm.raw_features(res.multi_hand_world_landmarks[0].landmark)
+                    if not trust:      # never calibrate windows against guesses
+                        feats = {k: v for k, v in feats.items()
+                                 if k not in ("thumb", "opp")}
+                    for k, v in feats.items():
                         lo, hi = cal.get(k, (v, v))
                         if v < lo - 0.5 or v > hi + 0.5:
                             grew = True
@@ -321,13 +366,17 @@ def main():
                     need = ["fingers: open wide, then a full fist "
                             f"({span.get('curl_hi', 0):.0f} of {CAL_NEED['curl_hi']} deg)"
                             if "curl_hi" in missing else "",
-                            "thumb: tuck it in, then splay it out "
-                            f"({span.get('abd', 0):.0f} of {CAL_NEED['abd']} deg)"
-                            if "abd" in missing else ""]
+                            "thumb: splay it out, then sweep it across the palm "
+                            f"({span.get('opp', 0):.0f} of {CAL_NEED['opp']} deg)"
+                            if "opp" in missing else ""]
                     hint = "   ".join(n for n in need if n)
                 tone = ui.VIOLET
             elif busy:
                 headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET
+            elif not ok:
+                headline, hint, tone = ("Camera offline",
+                                        f"retrying device {SETTINGS['device']} - "
+                                        "pick another in SETTINGS", ui.ROSE)
             elif tgt is None:
                 headline, hint, tone = "Show your hand", "hold it in view of the camera", ui.CREAM
             elif quiet >= settle_frames:
@@ -338,6 +387,8 @@ def main():
                     else ("Ready", "press space to send this pose", ui.AMBER))
             else:
                 headline, hint, tone = "Hold still", "the pose sends once it settles", ui.CREAM
+            if tgt and not trust:
+                hint += f"   |  thumb held: {why}"
             now = time.time()
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - fps_t, 1e-3))
             fps_t = now

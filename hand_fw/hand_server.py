@@ -1,4 +1,4 @@
-"""inspire_hand.hand_server - minimal HTTP/JSON API for the RH56F1 hand.
+"""hand_fw.hand_server - minimal HTTP/JSON API for the RH56F1 hand.
 
 Security: binds 127.0.0.1 ONLY (same policy as the lab's VNC-over-tunnel
 practice). Other projects reach it through an SSH tunnel:
@@ -85,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"inspire_hand server on {BIND}:{PORT} (localhost-only, tunnel in)")
+    print(f"hand_fw server on {BIND}:{PORT} (localhost-only, tunnel in)")
     srv = ThreadingHTTPServer((BIND, PORT), Handler)
     try:
         srv.serve_forever()

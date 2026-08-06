@@ -1,4 +1,4 @@
-"""inspire_hand.hand_api - Python API for the Inspire RH56F1 dexterous hand.
+"""hand_fw.hand_api - Python API for the Inspire RH56F1 dexterous hand.
 
 Wraps the SOEM-based `hand_ctl` binary (EtherCAT, .28 built-in RJ45).
 Axis order everywhere: [pinky, ring, middle, index, thumb_bend, thumb_rot]

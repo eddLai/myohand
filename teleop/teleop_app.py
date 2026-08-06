@@ -20,16 +20,19 @@ pose costs the hand two to three seconds, AUTO waits for the pose to
 settle and sends what the operator meant to hold, not what passed by
 mid-transition.
 """
-import argparse, json, os, re, subprocess, threading, time
+import argparse, json, os, re, subprocess, sys, threading, time
 import cv2
 import numpy as np
 import mediapipe as mp
 
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "camera")))
 import hand_mapping as hm
 import teleop_ui as ui
 
-SEND_CMD = [os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "soem_build", "hand_set")]  # lean path ~2-3s
+SEND_CMD = [os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "hand_fw", "soem_build", "hand_set"))]  # lean path ~2-3s
 SETTLE_FRAMES = 5      # consecutive quiet frames before AUTO fires
 SETTLE_TOL = 120       # target units counted as "not moving"
 DEADBAND = 250         # ignore poses this close to the last one sent

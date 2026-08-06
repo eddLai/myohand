@@ -1,9 +1,11 @@
-# inspire_hand — RH56F1-E4R-T1 EtherCAT Control API
+# hand_fw — RH56F1-E4R-T1 EtherCAT Control API
 
-Standalone control stack for the Inspire RH56F1 dexterous hand on `.28`
-(hand plugged into the built-in RJ45, controlled over EtherCAT). The
+Control stack for the Inspire RH56F1 dexterous hand on `.28` (hand
+plugged into the built-in RJ45, controlled over EtherCAT). The
 reverse-engineered protocol notes and the full bring-up log live in the
-ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`).
+ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`). The vision
+side lives in `../camera/`, the teleop app in `../teleop/`; this folder
+is everything that talks to the hand itself.
 
 ## Layers
 
@@ -13,22 +15,24 @@ ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`).
 | `hand_api.py` | Python lib + CLI. Gestures: open / fist / middle / point / release |
 | `hand_server.py` | HTTP JSON API bound to `127.0.0.1:8100` only (SSH tunnel in) |
 | `soem_build/hand_set.c` → `hand_set` | Lean pose setter (~2–3 s per pose); teleop sends through this path |
-| `teleop_app.py` + `run_teleop.sh` | MediaPipe webcam gesture mirroring with a SYNC button UI |
+| `../teleop/teleop_app.py` + `run_teleop.sh` | MediaPipe webcam gesture mirroring with a SYNC button UI |
+| `../camera/hand_mapping.py` | Skeleton → joint targets; the mapping the teleop and the NN labels share |
 | `experiments/` | Serial + EtherCAT bring-up probes (protocol archaeology) |
 
 ## Quick use
 
     ./hand_ctl state                      # telemetry, no motion
-    python3 hand_api.py open              # gestures from CLI
-    ./run_teleop.sh                       # webcam teleop (SYNC button; SPACE/A/Q keys)
-    python3 hand_server.py &              # REST for other projects:
+    ../venv/bin/python3 hand_api.py open  # gestures from CLI
+    ../teleop/run_teleop.sh               # webcam teleop (SYNC button; SPACE/A/Q keys)
+    ../venv/bin/python3 hand_server.py &  # REST for other projects:
     #   ssh -L 8100:127.0.0.1:8100 eddlai@120.126.83.28
     #   curl -X POST http://127.0.0.1:8100/gesture/open
 
 ## Gesture teleop
 
-`run_teleop.sh` opens the webcam window with a SYNC button; `hand_mapping.py`
-turns the skeleton into targets.
+`../teleop/run_teleop.sh` opens the webcam window with a SYNC button;
+`../camera/hand_mapping.py` turns the skeleton into targets. (The notes
+below document that pipeline; the code lives in those folders.)
 
 Flexion is scored as **joint angles on MediaPipe's world landmarks**, not as
 distance ratios over the projected image. Angles between bones do not change
@@ -133,16 +137,17 @@ a safe pose instead of failing. `hand_ctl` reports what it changed in
 
 ## Build and setup (from a clean clone)
 
-    ./setup.sh                            # one-shot: venv, clones, cmake, make, cap
+    ../setup.sh                           # one-shot at repo root: venv, SOEM, cmake, make, cap
 
-Or step by step:
+Or step by step (from the repo root):
 
     python3 -m venv venv && venv/bin/pip install -r requirements.txt
-    git clone https://github.com/OpenEtherCATsociety/SOEM.git soem_build/SOEM
-    git clone https://github.com/Kazuhito00/hand-gesture-recognition-using-mediapipe.git
-    cmake -S soem_build/SOEM -B soem_build/build
-    cmake --build soem_build/build -j4
-    make all && make cap                  # cap needs sudo once per rebuild
+    git clone https://github.com/OpenEtherCATsociety/SOEM.git hand_fw/soem_build/SOEM
+    cmake -S hand_fw/soem_build/SOEM -B hand_fw/soem_build/build
+    cmake --build hand_fw/soem_build/build -j4
+    make -C hand_fw all && make -C hand_fw cap   # cap needs sudo once per rebuild;
+                                                 # hand_set.c finds hand_safety.h via -I .,
+                                                 # so always build with make -C hand_fw
 
 ## Known limits
 

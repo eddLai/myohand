@@ -1,12 +1,18 @@
 # Vision-side dependencies for the teleop app. The control stack (hand_ctl,
 # hand_set, handd) is C and needs none of this.
 #
-# mediapipe is a range, not a pin: PyPI's newest aarch64 wheel is 0.10.18,
-# and the KD240 is aarch64. Pinning 0.10.21 meant the board tried to build
-# from source and died on 1.9 GB of RAM with no swap. 0.10.18 was measured
-# on the board (35.8 ms tracking, 27.9 FPS with four threads) and the
-# mapping is checked against it by test_mapping.py.
-mediapipe>=0.10.18,<0.11
+# mediapipe is pinned, and the upper bound matters as much as the lower.
+# The lower one is aarch64: PyPI's newest aarch64 wheel is 0.10.18 and the
+# KD240 is aarch64, so 0.10.21 made the board try to build from source and
+# die on 1.9 GB of RAM with no swap. The upper one is the API: this range
+# used to read <0.11, which pip happily satisfied with 0.10.35 on x86 -
+# and 0.10.35 has dropped the legacy `mp.solutions` namespace that
+# teleop_app.py uses, so it installs cleanly and then fails at the first
+# frame with "module 'mediapipe' has no attribute 'solutions'". Found on
+# .112 on 2026-08-06. 0.10.18 is also the version the board was measured
+# on (35.8 ms tracking, 27.9 FPS with four threads) and the one
+# test_mapping.py checks the mapping against.
+mediapipe==0.10.18
 opencv-python>=4.10,<5
 numpy<2
 pysoem

@@ -34,19 +34,47 @@ def _rot_z(v, deg):
             v[0] * math.sin(a) + v[1] * math.cos(a), v[2])
 
 
-def build_hand(finger_curl_deg, thumb_curl_deg=20.0, thumb_abduct_deg=40.0):
-    """Synthesize the 21 landmarks of a hand at the given posture."""
+def _unit(v):
+    m = math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+    return (v[0] / m, v[1] / m, v[2] / m)
+
+
+def _crossv(u, v):
+    return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0])
+
+
+def _walk(p, d, length):
+    return (p[0] + length * d[0], p[1] + length * d[1], p[2] + length * d[2])
+
+
+def build_hand(finger_curl_deg, thumb_curl_deg=20.0, thumb_opp_deg=30.0,
+               thumb_abd_deg=55.0):
+    """Synthesize the 21 landmarks of a hand at the given posture.
+
+    The thumb metacarpal is laid out in the same palm frame the mapping
+    derives (a right hand as the mirrored teleop pipeline sees it, palm
+    facing -z), so thumb_opp_deg and thumb_abd_deg are exact ground truth.
+    """
     pts = [(0.0, 0.0, 0.0)] * 21
-    # thumb: swing the metacarpal away from the palm by the abduction angle
-    a = math.radians(thumb_abduct_deg)
+    pa = _unit(MCP_POS["index"])         # wrist sits at the origin
+    n = (0.0, 0.0, -1.0)                 # palm-ward
+    e1 = _unit(_crossv(n, pa))           # in the palm plane, thumb-ward
+    al, ph = math.radians(thumb_abd_deg), math.radians(thumb_opp_deg)
+    t = tuple(math.cos(al) * pa[i]
+              + math.sin(al) * (math.cos(ph) * e1[i] + math.sin(ph) * n[i])
+              for i in range(3))
     pts[1] = (0.025, 0.020, 0.0)
-    pts[2] = (pts[1][0] + 0.035 * math.cos(a), pts[1][1] + 0.025,
-              pts[1][2] - 0.035 * math.sin(a))
-    c = math.radians(thumb_curl_deg)
-    pts[3] = (pts[2][0] + 0.028 * math.cos(c), pts[2][1] + 0.018,
-              pts[2][2] - 0.028 * math.sin(c))
-    pts[4] = (pts[3][0] + 0.022 * math.cos(2 * c), pts[3][1] + 0.014,
-              pts[3][2] - 0.022 * math.sin(2 * c))
+    pts[2] = _walk(pts[1], t, 0.035)
+    # distal bones bend in the plane of t and the palm normal, so the
+    # flexion plane swings with opposition and the bends sum to the curl
+    u = _unit(tuple(n[i] - sum(n[j] * t[j] for j in range(3)) * t[i]
+                    for i in range(3)))
+    c = math.radians(thumb_curl_deg / 2)
+    d1 = tuple(math.cos(c) * t[i] + math.sin(c) * u[i] for i in range(3))
+    d2 = tuple(math.cos(2 * c) * t[i] + math.sin(2 * c) * u[i] for i in range(3))
+    pts[3] = _walk(pts[2], d1, 0.028)
+    pts[4] = _walk(pts[3], d2, 0.022)
     for name, base in MCP_POS.items():
         mcp_i, pip_i, dip_i, tip_i = hm.FINGER_CHAINS[name]
         l1, l2, l3 = PHALANX[name]
@@ -112,16 +140,93 @@ def sweep(param, values):
 
 print("\n--- thumb at its extremes ---")
 bend = [t[4] for t in sweep("thumb_curl_deg", range(0, 101, 10))]
-rot = [t[5] for t in sweep("thumb_abduct_deg", range(0, 91, 10))]
+rot = [t[5] for t in sweep("thumb_opp_deg", range(0, 91, 10))]
 fail = 0
-for name, series, rising in (("bend vs curl", bend, False), ("rot vs abduction", rot, True)):
+for name, series, rising in (("bend vs curl", bend, False),
+                             ("rot vs opposition", rot, False)):
     ok = all((b >= a) == rising or a == b for a, b in zip(series, series[1:]))
     print(f"{name:18s} monotonic {'up' if rising else 'down'}: {'ok' if ok else 'FAIL'}"
           f"   reaches {min(series)}..{max(series)}")
     fail += not ok
 print(f"unreachable head-room: bend {hm.T_MAX - max(bend)} units, "
-      f"rot {hm.T_MAX - max(rot)} units")
-print("(head-room is a calibration reading, not a failure: the synthetic thumb"
-      " carries a built-in bend, so run calibrate.py against a real hand)")
+      f"rot {hm.T_MAX - max(rot)} units (ground truth is exact, expect 0)")
+
+print("\n--- channel independence ---")
+rot_flex = [t[5] for t in sweep("thumb_curl_deg", range(0, 101, 10))]
+bend_opp = [t[4] for t in sweep("thumb_opp_deg", range(0, 81, 10))]
+rot_curl = [hm.pose_from_world_landmarks(view(build_hand(c), 0, 0, 0))[5]
+            for c in range(0, 71, 10)]
+for name, series in (("rot while thumb flexes", rot_flex),
+                     ("bend while thumb opposes", bend_opp),
+                     ("rot while fingers curl", rot_curl)):
+    s = spread(series)
+    print(f"{name:26s} spread {s:4d} units  {'ok' if s == 0 else 'FAIL'}")
+    fail += s != 0
+
+print("\n--- opposition ground truth under rotation ---")
+worst = 0.0
+cases = 0
+for phi in (0, 20, 40, 60, 80):
+    for alpha in (35, 55, 75):
+        pts = build_hand(20.0, thumb_opp_deg=phi, thumb_abd_deg=alpha)
+        for v in VIEWS:
+            got = hm.thumb_features(view(pts, *v))["opposition"]
+            worst = max(worst, abs(got - phi))
+            cases += 1
+print(f"worst |measured - true| over {cases} cases: {worst:.3f} deg  "
+      f"{'ok' if worst < 0.5 else 'FAIL'}")
+fail += worst >= 0.5
+
+print("\n--- mirrored left hand agrees ---")
+pts = view(build_hand(30.0, thumb_curl_deg=40.0, thumb_opp_deg=50.0), 15, -10, 5)
+right = hm.pose_from_world_landmarks(pts)
+left = hm.pose_from_world_landmarks(
+    [SimpleNamespace(x=-p.x, y=p.y, z=p.z) for p in pts], handedness="Left")
+diff = max(abs(a - b) for a, b in zip(right, left))
+print(f"right {right} vs mirrored-left {left}: "
+      f"{'ok' if diff <= 1 else 'FAIL'}")
+fail += diff > 1
+
+def to_image(pts):
+    """Project to image convention (x right, y down, camera on -z): a
+    180-deg camera roll about z puts the synthetic thumb where the
+    mirrored teleop frame shows it (image-left on a palm view)."""
+    return [SimpleNamespace(x=-p.x, y=-p.y, z=p.z) for p in pts]
+
+
+print("\n--- facing: silhouette sign vs true palm normal ---")
+pts0 = build_hand(20.0)
+bad = 0
+for v in [(y, p, r) for y in (0, 40, 140, 180, 220)
+                    for p in (0, 25) for r in (0, 30)]:
+    nz = _rot_z(_rot_x(_rot_y((0.0, 0.0, -1.0), v[0]), v[1]), v[2])[2]
+    want = "palm" if nz < 0 else "back"
+    img = to_image(view(pts0, *v))
+    bad += hm.hand_facing(img, "Right") != want
+    bad += hm.hand_facing(img, "Left") == want   # chirality flips the sign
+edge = hm.hand_facing(to_image(view(pts0, 90, 0, 0)), "Right")
+print(f"20 views x2 chirality: {'ok' if bad == 0 else f'{bad} FAIL'};"
+      f" edge-on reads {edge}  {'ok' if edge is None else 'FAIL'}")
+fail += bad + (edge is not None)
+
+print("\n--- thumb occlusion and the trust gate ---")
+crossed = build_hand(20.0, thumb_opp_deg=130.0, thumb_abd_deg=55.0)
+splayed = build_hand(20.0, thumb_opp_deg=10.0, thumb_abd_deg=55.0)
+front = lambda p: to_image(view(p, 0, 0, 0))
+back = lambda p: to_image(view(p, 180, 0, 0))
+for got, want, name in (
+        (hm.thumb_occluded(back(crossed), "back"), True, "crossed thumb hidden from the back"),
+        (hm.thumb_occluded(back(splayed), "back"), False, "splayed thumb visible from the back"),
+        (hm.thumb_occluded(front(crossed), "palm"), False, "crossed thumb visible from the palm"),
+        (hm.thumb_trust(front(pts0), "Right", 0.99, "Right")[0], True, "clean palm view trusted"),
+        (hm.thumb_trust(front(pts0), "Left", 0.99, "Right")[0], False, "flipped label distrusted"),
+        (hm.thumb_trust(front(pts0), "Right", 0.6, "Right")[0], False, "unsure label distrusted"),
+        (hm.thumb_trust(to_image(view(pts0, 90, 0, 0)), "Right", 0.99, "Right")[0],
+         False, "edge-on distrusted"),
+        (hm.thumb_trust(back(crossed), "Right", 0.99, "Right")[0],
+         False, "hidden thumb distrusted")):
+    print(f"{name:38s} {'ok' if got == want else 'FAIL'}")
+    fail += got != want
+
 if fail:
     print("DIRECTION FAILURE")

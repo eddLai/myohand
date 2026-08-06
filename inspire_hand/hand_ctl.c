@@ -23,7 +23,15 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define IFACE "enp59s0f1"
+/* 網卡名：環境變數 HAND_IFACE 優先，未設則用預設值。
+   手會在不同主機／網孔之間搬動，這樣換孔就不必重新編譯。
+   用法： HAND_IFACE=enp8s0 ./hand_ctl state          */
+static const char *hand_iface(void)
+{
+   const char *s = getenv("HAND_IFACE");
+   return (s && *s) ? s : "enp17s0";
+}
+#define IFACE hand_iface()
 #define WAKE_MS_MAX 12000
 #define HOLD_MS 1200
 

@@ -9,4 +9,4 @@ if [ -z "$XAUTHORITY" ]; then
     done
 fi
 cd "$(dirname "$0")"
-exec "$HOME/inspire_hand/venv/bin/python3" teleop_app.py --device "${1:-4}"
+exec "$HOME/myohand/inspire_hand/venv/bin/python3" teleop_app.py --device "${1:-4}"

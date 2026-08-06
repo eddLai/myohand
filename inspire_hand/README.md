@@ -37,6 +37,38 @@ targets from any viewpoint. `test_mapping.py` views a synthetic hand from 45
 orientations and measures the wander: 0 target units for the joint-angle
 mapping, up to 1700 (the entire travel) for the distance-ratio one it replaced.
 
+The thumb is decomposed in a palm-fixed frame rather than read as one
+scalar. `thumb_rot` is driven by the **opposition angle** alone — the
+metacarpal's rotation about the wrist→index-MCP axis, `atan2` of its
+palm-normal vs in-plane components — which is invariant to thumb flexion
+and to splay toward the index. This replaced an unsigned palm-plane
+elevation that mixed opposition, abduction and CMC flexion into one
+number, so the rot axis twitched whenever the thumb merely bent.
+`thumb_features()` exposes the three separated channels
+`{flexion, abduction, opposition}` in degrees for downstream learners
+(the EMG→pose network trains against these labels); abduction has no
+robot axis but is reported by `calibrate.py` as "thumb splay".
+`test_mapping.py` proves the channels do not leak into each other and
+that a mirrored left hand (`handedness="Left"`) maps identically.
+
+The decomposition is only as good as the landmarks, and MediaPipe draws
+plausible thumbs it cannot see, so a **trust gate** (`thumb_trust()`)
+decides per frame whether the thumb channels can be believed rather than
+trying to fix them: (1) the handedness label disagreeing with the hand
+locked at calibration (`HANDEDNESS` in calibration.json, majority-voted
+while the operator demonstrates their range) means the net currently
+perceives the mirror hand, whose inverted depth relief flips the
+opposition sign; (2) a label score under `LABEL_SURE` means it is
+mid-flip; (3) `hand_facing()` reads palm/back from the 2D silhouette's
+signed area — the part MediaPipe gets right even when its depth is
+hallucinated — and refuses the edge-on band where facing is undefined;
+(4) `thumb_occluded()` flags a thumb drawn inside the palm outline while
+the back of the hand faces the camera. Untrusted frames hold the two
+thumb axes at the last believed pose and are excluded from calibration
+windows; the rail shows why ("thumb held: edge-on / hand looks flipped /
+thumb hidden"). Fingers are never gated - they stay visible from either
+side.
+
 The window itself is an instrument panel (`teleop_ui.py`), built for an
 operator whose eyes are on their own hand: one large line says what to do next
 ("Hold still", "Ready", "Hand moving"), and a schematic of the right hand shows
@@ -44,10 +76,17 @@ the commanded posture, thumb included - that thumb swings with the rotation
 axis, so the gauge reads as a hand rather than as a bar chart. Amber means
 ready, violet means the hand is executing.
 
-Four controls sit above the video: SYNC mirrors your hand automatically,
-CALIBRATE records your range, OPEN HAND sends every joint open, and SETTINGS
+Five controls sit above the video: SYNC mirrors your hand automatically,
+CALIBRATE records your range, OPEN HAND sends every joint open, SETTINGS
 opens a plate for grip force, speed, camera and smoothing - stepped rather than
-dragged, saved to teleop_settings.json, applied to the next pose. The gauge
+dragged, saved to teleop_settings.json, applied to the next pose - and HAND
+probes the EtherCAT link without motion (`hand_set -1 ...` is a hold pose).
+
+Camera and hand come up independently: the window opens even if either is
+missing. A dead camera leaves the panel on a placeholder, retries in the
+background and can be switched from SETTINGS; a dead hand flips the HAND
+button to OFFLINE and switches AUTO sync off while tracking and calibration
+keep running. Either side recovers from its own control without a restart. The gauge
 draws two readings: the amber fill is the pose that was asked for, the pale tick
 is where the hand reported it got to. They separate whenever a guard clamps or
 an axis stalls.

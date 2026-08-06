@@ -35,7 +35,9 @@ int main(int argc, char **argv)
 
    lock_fd = hs_lock(20);
    if (lock_fd < 0) { printf("bus busy: another master holds the hand\n"); return 3; }
-   if (!ecx_init(&ctx, "enp59s0f1")) { printf("init fail\n"); return 1; }
+   const char *ifname = getenv("HAND_IFACE");
+   if (!ifname || !*ifname) ifname = "enp17s0";
+   if (!ecx_init(&ctx, ifname)) { printf("init fail\n"); return 1; }
    if (ecx_config_init(&ctx) <= 0) { printf("no slaves\n"); return 1; }
    ctx.slavelist[1].mbx_proto = 0;
    ecx_config_map_group(&ctx, IOmap, 0);

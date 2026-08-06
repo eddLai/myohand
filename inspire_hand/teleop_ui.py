@@ -37,6 +37,7 @@ SYNC_BTN = (16, 16, 172, 64)
 CAL_BTN = (184, 16, 330, 64)
 PARK_BTN = (342, 16, 500, 64)
 SET_BTN = (512, 16, 638, 64)
+HAND_BTN = (650, 16, 830, 64)
 
 # The settings plate: one row per knob, stepped rather than dragged, because a
 # click is the only gesture this window has. (label, key, step, low, high, unit)

@@ -32,20 +32,24 @@ def check(name, cond, detail=""):
         fails += 1
 
 
-# --- the shipped asset ----------------------------------------------------
-active, profiles = hm.list_profiles()
-check("the repo ships the measured profile",
-      "operator-2026-08-02" in profiles, str(list(profiles)))
-w = profiles.get("operator-2026-08-02", {}).get("windows", {})
-check("its measured values are the ones from the 245-frame run",
-      w == {"THUMB_OPEN": 24.0, "THUMB_CLOSED": 80.0,
-            "ABD_MIN": 10.0, "ABD_MAX": 30.0}, str(w))
-check("it is the active profile", active == "operator-2026-08-02", str(active))
-check("importing hand_mapping applies it",
-      (hm.THUMB_OPEN, hm.THUMB_CLOSED, hm.ABD_MIN, hm.ABD_MAX)
-      == (24.0, 80.0, 10.0, 30.0))
-check("windows the profile omits keep the module default",
-      hm.CURL_OPEN == 15.0 and hm.CURL_CLOSED == 150.0)
+# --- what a profile may set -----------------------------------------------
+# There is no shipped profile to assert: camera/calibration.json is
+# gitignored and per-operator. This block used to require the one committed
+# at c429524, whose measured windows were thumb *abduction* - and abduction
+# stopped driving the target when the mapping moved to opposition, so those
+# numbers cannot stand in for a measured OPP window. Re-measuring is a job
+# for whoever is next in front of the camera.
+check("every window a profile may set is one the module applies",
+      all(hasattr(hm, k) for k in hm.WINDOW_KEYS), str(hm.WINDOW_KEYS))
+
+before = (hm.CURL_OPEN, hm.CURL_CLOSED)
+with tempfile.TemporaryDirectory() as d:
+    path = os.path.join(d, "calibration.json")
+    hm.save_calibration({"THUMB_OPEN": 21.0}, name="partial", path=path)
+    hm.load_calibration("partial", path=path)
+    check("a profile that omits a window leaves that window alone",
+          (hm.CURL_OPEN, hm.CURL_CLOSED) == before,
+          f"{(hm.CURL_OPEN, hm.CURL_CLOSED)} != {before}")
 
 # --- saving cannot land on top of measured data ---------------------------
 with tempfile.TemporaryDirectory() as d:
@@ -87,7 +91,12 @@ with tempfile.TemporaryDirectory() as d:
         json.dump({"THUMB_OPEN": 21.0, "ABD_MAX": 33.0}, f)
     got = hm.load_calibration(path=path)
     check("an old flat calibration.json is still readable",
-          got == {"THUMB_OPEN": 21.0, "ABD_MAX": 33.0}, str(got))
+          got == {"THUMB_OPEN": 21.0}, str(got))
+    # ABD_MAX is exactly the legacy key this filter exists for: the next
+    # line of load_calibration is globals().update(windows), so a window
+    # the module no longer has must be dropped rather than injected.
+    check("a window the module no longer knows is dropped, not injected",
+          not hasattr(hm, "ABD_MAX"))
     check("it arrives under a name rather than nameless",
           hm.list_profiles(path)[0] == "legacy")
 

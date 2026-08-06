@@ -8,6 +8,7 @@
 | `camera/` | MediaPipe 手部追蹤 -> 關節角度分解 (`hand_mapping.py`)、校正、mapping 測試 | 可動 |
 | `teleop/` | Webcam teleop app：儀表板 UI、SYNC/CALIBRATE/HAND 控制 | 可動 |
 | `hand_fw/` | RH56F1 的 EtherCAT 控制堆疊：C core (SOEM)、安全層、Python API + HTTP server + 常駐 daemon。操作說明在它的 README，技術細節在 vault | 可動 |
+| `filter/` | 送給手之前的命令平滑與遲滯：靜止時不要動，動起來不要鈍 | 開發中，目前只有量測工具，見其 README |
 | `nn/` | EMG -> 姿態的網路 (labels 來自 `camera/hand_mapping.thumb_features`) | 規劃中，見其 README |
 | `pid/` | 對 ANGLEACT 回授做閉迴路關節控制 | 規劃中，見其 README |
 | `data/` | 已錄好的手勢資料集 | 見下 |

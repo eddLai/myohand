@@ -126,9 +126,28 @@ static int eff_of(const int16_t *tgt, const int16_t *ang, int i)
    return tgt[i] != HS_TGT_HOLD ? tgt[i] : hs_ang_to_target(ang[i]);
 }
 
+/* hand_collision_table.h is GENERATED against the old 0..2000 target
+   scale (its own header comment says so); this tree's target scale is
+   now ANGLEACT, 890..1850 (see hand_safety.h). Convert at the boundary
+   rather than regenerate the table, using the same old<->new mapping
+   hand_safety.h documents for the inherited interlock thresholds above:
+   ANGLEACT = 890 + old * 960 / 2000. Getting this wrong does not fail to
+   build or throw a conflict - it just looks up the wrong cell. */
+static int to_hct_scale(int v)
+{
+   return clampi((v - ANG_CLOSED) * 2000 / (ANG_OPEN - ANG_CLOSED), 0, 2000);
+}
+
+static int16_t from_hct_scale(int v)
+{
+   return (int16_t)clampi(ANG_CLOSED + v * (ANG_OPEN - ANG_CLOSED) / 2000,
+                          HS_TGT_MIN, HS_TGT_MAX);
+}
+
 /* max over the 2x2 table cells enclosing the query point: the tables
    are deliberately not monotone (half-curled fingers block the thumb
-   more than fully curled ones), so a single floor cell is not safe */
+   more than fully curled ones), so a single floor cell is not safe.
+   p and s are on the table's native 0..2000 scale - see to_hct_scale. */
 static int hct_lookup(const int16_t tab[HCT_N][HCT_N], int p, int s)
 {
    int i0 = clampi(p / HCT_STEP, 0, HCT_N - 1);
@@ -186,7 +205,7 @@ int hs_interlock(int16_t *tgt, const int16_t *ang, char *why, size_t n)
       f = idx < md ? idx : md;
       thb = eff_of(tgt, ang, AX_THUMB_BEND);
       rot = eff_of(tgt, ang, AX_THUMB_ROT);
-      want = hct_lookup(hct_tb_min, f, rot);
+      want = from_hct_scale(hct_lookup(hct_tb_min, to_hct_scale(f), to_hct_scale(rot)));
       if (thb < want)
       {
          tgt[AX_THUMB_BEND] = (int16_t)want;
@@ -196,7 +215,7 @@ int hs_interlock(int16_t *tgt, const int16_t *ang, char *why, size_t n)
          changed++;
          thb = want;
       }
-      want = hct_lookup(hct_rot_min, f, thb);
+      want = from_hct_scale(hct_lookup(hct_rot_min, to_hct_scale(f), to_hct_scale(thb)));
       if (rot < want)
       {
          tgt[AX_THUMB_ROT] = (int16_t)want;

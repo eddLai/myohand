@@ -127,13 +127,16 @@ static struct {
                             slave's own watchdog time and add a margin */
    int move_step;        /* target change big enough to time a step response */
    int move_eps;         /* ANGLEACT change that counts as motion having begun */
+   int stuck_strikes;    /* commanded moves that may produce nothing before
+                            the slave is declared to have stopped applying */
+   const char *on_stuck; /* "exit" or "report" */
    const char *lat_path; /* CSV of per-step latency breakdowns */
    int cpu;              /* pin the loop to this core, -1 = wherever */
    int rt_prio;          /* SCHED_FIFO priority, 0 = leave scheduling alone */
    int lock_memory;      /* mlockall, so a page fault cannot stall a cycle */
    int simulate;
 } cfg = { NULL, SOCKET_DEFAULT, "continuous", 500, 0, 50, 500, 1000, 120, 300,
-          0, 96, 10, NULL, -1, 0, 0, 0 };
+          0, 96, 10, 3, "exit", NULL, -1, 0, 0, 0 };
 /* rate_hz is 500 rather than 1000 because 1000 is the one rate this hand
    cannot be driven at. rate_sweep on 2026-08-06 held OPERATIONAL and
    stepped the middle finger at 1, 2, 3, 4, 5, 6 and 8 ms: every period
@@ -164,6 +167,31 @@ static int dc_hasdc, dc_configured, dc_active;
 static int32_t dc_pdelay;
 
 static volatile sig_atomic_t running = 1;
+
+/* Has the slave stopped applying what we send it?
+ *
+ * On 2026-08-06 it did, and nothing here noticed for the rest of the
+ * session. Running ecat_scan against the same NIC while this daemon held
+ * the bus reset the slave's state machine underneath it; afterwards every
+ * check this program makes still passed. The working counter incremented,
+ * because the ESC was still receiving and acknowledging - what had stopped
+ * was the application above it. Telemetry kept updating, because inputs
+ * are a different sync manager. ecx_readstate still said OPERATIONAL with
+ * AL 0. Every target was answered ok and unguarded and seq climbed past
+ * 1300. The hand did not move and drew no current for any of it.
+ *
+ * The one thing that was observably different lives outside this program:
+ * motion was commanded and none happened. So compare the two - which the
+ * latency tracker already does per step, in lat_flush's `moved`. A pose
+ * that asks for real travel, produces none, and draws no current is one
+ * strike; several in a row is not a coincidence.
+ *
+ * Current is part of the test because a stalled axis also fails to travel,
+ * and that is a different fault with its own handling (hs_stall_relief).
+ * An axis being driven into something draws current; a slave that has
+ * stopped applying draws none. */
+static int stuck;            /* declared: the slave is not applying */
+static int dead_streak;      /* consecutive commanded moves that did nothing */
 static uint32_t seq;              /* every accepted target gets one */
 
 static void on_signal(int s) { (void)s; running = 0; }
@@ -175,6 +203,8 @@ static long now_ms(void)
    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
 }
 
+static void logf_(const char *fmt, ...)
+   __attribute__((format(printf, 1, 2)));
 static void logf_(const char *fmt, ...)
 {
    va_list ap;
@@ -299,6 +329,7 @@ static struct {
    int64_t t_frame, t_map, t_send, t_recv, t_write, t_wire, t_exec, t_move;
    int16_t ang0[6];
    int16_t tgt[6];
+   int16_t cur_max;          /* highest current seen while this step ran */
 } track;
 
 static int64_t now_ns(void)
@@ -328,6 +359,32 @@ static void lat_flush(void)
    r->move   = us_between(track.t_wire, track.t_move);
    r->total  = us_between(track.t_frame, track.t_move);
    r->moved  = track.t_move != 0;
+
+   /* The one comparison nothing else here makes: was travel asked for and
+      did any happen. Current keeps a stalled axis from counting - that is
+      a different fault and hs_stall_relief owns it. */
+   if (r->moved || track.cur_max > 20)
+      dead_streak = 0;
+   else if (++dead_streak >= cfg.stuck_strikes && !stuck)
+   {
+      stuck = 1;
+      logf_("NOT APPLYING: %d commanded moves in a row produced no travel "
+            "and no current, while the bus looks healthy. The slave has "
+            "stopped consuming process data - most often because a second "
+            "master (ecat_scan, another handd) touched this NIC and reset "
+            "its state machine. Restarting is the only known recovery.",
+            dead_streak);
+      if (!strcmp(cfg.on_stuck, "exit"))
+      {
+         logf_("--on-stuck=exit: shutting down rather than answering "
+               "clients ok while driving nothing");
+         running = 0;
+      }
+      else
+         logf_("--on-stuck=report: staying up, but `state` and `hello` now "
+               "say applying=false");
+   }
+
    lat_next = (lat_next + 1) % LAT_RING;
    if (lat_n < LAT_RING) lat_n++;
 
@@ -378,6 +435,7 @@ static void lat_begin(const int16_t *tgt, int64_t t_frame, int64_t t_map,
    track.t_send = t_send;
    track.t_recv = t_recv;
    memcpy(track.tgt, tgt, sizeof track.tgt);
+   track.cur_max = 0;
    for (i = 0; i < 6; i++) track.ang0[i] = bus_up ? in[IN_ANG + i] : 0;
 }
 
@@ -388,6 +446,9 @@ static void lat_sample(void)
    if (!track.active) return;
    if (track.t_write && !track.t_wire) { track.t_wire = now_ns(); return; }
    if (!track.t_wire) return;
+   if (bus_up)
+      for (i = 0; i < 6; i++)
+         if (in[IN_CUR + i] > track.cur_max) track.cur_max = in[IN_CUR + i];
    if (bus_up && !track.t_move)
       for (i = 0; i < 6; i++)
       {
@@ -1002,6 +1063,8 @@ static client_t clients[MAX_CLIENTS];
 static int listen_fd = -1;
 
 static void creply(client_t *c, const char *fmt, ...)
+   __attribute__((format(printf, 2, 3)));
+static void creply(client_t *c, const char *fmt, ...)
 {
    char line[1024];
    int n;
@@ -1037,8 +1100,10 @@ static void reply_state(client_t *c)
    jarr(err, sizeof err, &in[IN_ERR]);
    jarr(sta, sizeof sta, &in[IN_STA]);
    jarr(tmp, sizeof tmp, &in[IN_TMP]);
-   creply(c, "{\"ok\":true,\"bus\":\"up\",\"simulate\":%s,\"pos\":%s,\"ang\":%s,"
+   creply(c, "{\"ok\":true,\"bus\":\"up\",\"applying\":%s,\"simulate\":%s,"
+             "\"pos\":%s,\"ang\":%s,"
              "\"frc\":%s,\"cur\":%s,\"err\":%s,\"sta\":%s,\"tmp\":%s}",
+          stuck ? "false" : "true",
           cfg.simulate ? "true" : "false", pos, ang, frc, cur, err, sta, tmp);
 }
 
@@ -1062,9 +1127,11 @@ static void handle_line(client_t *c, char *line)
       snprintf(tl + n, sizeof tl - n, "]");
       creply(c, "{\"ok\":true,\"daemon\":\"handd\",\"trigger\":\"%s\","
                 "\"triggers\":%s,"
-                "\"rate_hz\":%d,\"force\":%d,\"speed\":%d,\"simulate\":%s,"
+                "\"rate_hz\":%d,\"force\":%d,\"speed\":%d,\"applying\":%s,"
+                "\"simulate\":%s,"
                 "\"scale\":%s}",
              trig->name, tl, cfg.rate_hz, cfg.force, cfg.speed,
+             stuck ? "false" : "true",
              cfg.simulate ? "true" : "false", js);
    }
    else if (!strcmp(cmd, "scale"))
@@ -1434,6 +1501,12 @@ static void usage(void)
       "  --explain-al=CODE  read an AL status code aloud and exit\n"
       "  --latency-log=PATH CSV of the per-step latency breakdown\n"
       "  --move-step=N      target change big enough to time (default 200)\n"
+      "  --stuck-strikes=N  commanded moves that may produce nothing before\n"
+      "                     the slave is called stuck (default 3)\n"
+      "  --on-stuck=WHAT    exit (default) or report. exit is the safer\n"
+      "                     default: a daemon that answers ok while driving\n"
+      "                     nothing is worse than one that is gone, and a\n"
+      "                     restart is the only known recovery anyway.\n"
       "  --move-eps=N       ANGLEACT change that counts as motion (default 10)\n"
       "  --cpu=N            pin the PDO loop to one core\n"
       "  --rt-prio=N        run it SCHED_FIFO at this priority (needs cap_sys_nice)\n"
@@ -1484,6 +1557,18 @@ static int parse_args(int argc, char **argv)
       { if (int_arg(val, "move-step", 1, 2000, &cfg.move_step)) return 1; }
       else if (!strncmp(a, "--move-eps=", 11))
       { if (int_arg(val, "move-eps", 1, 500, &cfg.move_eps)) return 1; }
+      else if (!strncmp(a, "--stuck-strikes=", 16))
+      { if (int_arg(val, "stuck-strikes", 1, 100, &cfg.stuck_strikes)) return 1; }
+      else if (!strncmp(a, "--on-stuck=", 11))
+      {
+         if (strcmp(val, "exit") && strcmp(val, "report"))
+         {
+            fprintf(stderr, "handd: --on-stuck must be exit or report, "
+                            "not '%s'\n", val);
+            return 1;
+         }
+         cfg.on_stuck = val;
+      }
       else if (!strncmp(a, "--cpu=", 6))
       { if (int_arg(val, "cpu", 0, 63, &cfg.cpu)) return 1; }
       else if (!strncmp(a, "--rt-prio=", 10))
@@ -1600,11 +1685,15 @@ int main(int argc, char **argv)
    run_loop();
 
    logf_("shutting down (the hand keeps whatever pose it was last given)");
+   /* A supervisor has to be able to tell "asked to stop" from "gave up
+      because the slave stopped listening", or it will restart the first
+      and not the second. */
+   if (stuck) logf_("exit 5: the slave was not applying");
    for (i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0) close(clients[i].fd);
    close(listen_fd);
    unlink(cfg.sock_path);
    if (lat_log) fclose(lat_log);
    bus_close();
    hs_unlock(lock_fd);
-   return 0;
+   return stuck ? 5 : 0;
 }

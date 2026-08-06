@@ -152,12 +152,20 @@ is the motor.
 > **Never run a second master while `handd` holds the bus.** `ecat_scan`
 > looks read-only and is not: its `config_init` drives the slave's state
 > machine, and doing that underneath a running daemon leaves the slave
-> accepting targets and applying none of them. Nothing reports it - `bus
-> up`, `al=0`, every reply `ok`, `seq` climbing, telemetry updating, no
-> motion and no current. `ecat_scan` now takes the same bus lock every
-> other tool takes and refuses rather than becoming that second master,
-> but the daemon still cannot detect the state it leaves behind. If the
-> hand stops responding while everything looks healthy, restart `handd`.
+> accepting targets and applying none of them. Every indicator keeps
+> saying it is fine - `bus up`, `al=0`, every reply `ok`, `seq` climbing,
+> telemetry updating - with no motion and no current.
+>
+> Two things now guard it. `ecat_scan` takes the same bus lock every other
+> tool takes and refuses rather than becoming that second master. And the
+> daemon checks its own work: it already knew, per step, whether a
+> commanded move produced travel, and now counts the ones that produce
+> neither travel nor current. Three in a row and it says so and, by
+> default, exits with code 5 rather than answering `ok` while driving
+> nothing — a supervisor restarts it, which was always the only recovery.
+> `--on-stuck=report` keeps it up instead, with `applying:false` in
+> `state` and `hello`.
+>
 > To read state without a second master, ask the daemon:
 > `hand_client.HandClient().state()`.
 

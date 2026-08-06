@@ -1,12 +1,14 @@
 """inspire_hand.hand_api - Python API for the Inspire RH56F1 dexterous hand.
 
-Wraps the SOEM-based `hand_ctl` binary (EtherCAT, .28 built-in RJ45).
+Wraps the SOEM-based `hand_ctl` binary (EtherCAT).
 Axis order everywhere: [pinky, ring, middle, index, thumb_bend, thumb_rot]
-Targets: 0 = fully closed, 2000 = fully open, -1 = leave unchanged.
+Targets are ANGLEACT counts: ~890 = fully closed, ~1850 = fully open,
+-1 = leave unchanged. The scale lives in hand_scale.py / hand_safety.h.
 
 F1 quirks handled here:
-  - pose executes when the EtherCAT master disconnects -> each call is one
-    connect/wake/write/disconnect cycle (takes ~5-15 s incl. wake)
+  - the firmware applies a pose only when the sync-manager watchdog
+    expires (99.9 ms). Dropping the link is how this path causes that, so
+    each call is one connect/wake/write/disconnect cycle
   - index+thumb deep-close collision -> guarded in hand_ctl; fist() staggers
     fingers and thumb into two phases automatically
 """
@@ -15,12 +17,18 @@ import subprocess
 import time
 from pathlib import Path
 
-HAND_CTL = str(Path(__file__).resolve().parent / "hand_ctl")
-SETTLE_S = 6  # wait after disconnect for the pose to physically execute
+import hand_scale
 
-OPEN = 2000
-CLOSED = 0
-KEEP = -1
+HAND_CTL = str(Path(__file__).resolve().parent / "hand_ctl")
+# Wait after the disconnect for the pose to physically execute. The
+# protocol needs ~100 ms of watchdog plus the axis's own travel time; the
+# rest of this is the conservative margin that predates knowing that, and
+# it is why a gesture call feels slow. Measured floor: see the README.
+SETTLE_S = 6
+
+OPEN = hand_scale.TARGET_MAX
+CLOSED = hand_scale.TARGET_MIN
+KEEP = hand_scale.TARGET_HOLD
 
 
 class HandError(RuntimeError):
@@ -51,7 +59,7 @@ class InspireHand:
         return _run(["state"])
 
     def pose(self, targets, force=500, speed=800, settle=True):
-        """Execute a 6-axis pose. targets: list of 6 ints (0..2000 or -1)."""
+        """Execute a 6-axis pose. targets: 6 ints (890..1850, or -1)."""
         if len(targets) != 6:
             raise HandError("need exactly 6 targets")
         out = _run(["pose"] + [str(int(t)) for t in targets] +
@@ -64,22 +72,25 @@ class InspireHand:
     def open_hand(self, **kw):
         return self.pose([OPEN] * 5 + [KEEP], **kw)
 
-    def fist(self, grip=300, **kw):
+    # The gesture constants below moved with the 2026-08-06 scale
+    # correction: each names the position its old 0..2000 value named
+    # (grip 300 -> 1034, 700 -> 1226, 800 -> 1274).
+    def fist(self, grip=1034, **kw):
         """Safe two-phase fist: fingers first, thumb afterwards (collision
         guard forbids closing index and thumb together)."""
         first = self.pose([grip, grip, grip, grip, KEEP, KEEP], **kw)
-        second = self.pose([KEEP, KEEP, KEEP, KEEP, 700, KEEP], **kw)
+        second = self.pose([KEEP, KEEP, KEEP, KEEP, 1226, KEEP], **kw)
         return {"phase1": first, "phase2": second}
 
     def middle_finger(self, **kw):
         """Fingers+thumb down, middle up. Thumb staggered for safety."""
-        first = self.pose([CLOSED, CLOSED, OPEN, 700, KEEP, KEEP], **kw)
-        second = self.pose([KEEP, KEEP, KEEP, KEEP, 800, KEEP], **kw)
+        first = self.pose([CLOSED, CLOSED, OPEN, 1226, KEEP, KEEP], **kw)
+        second = self.pose([KEEP, KEEP, KEEP, KEEP, 1274, KEEP], **kw)
         return {"phase1": first, "phase2": second}
 
     def point(self, **kw):
         """Index extended, others folded (index open so no thumb conflict)."""
-        return self.pose([CLOSED, CLOSED, CLOSED, OPEN, 700, KEEP], **kw)
+        return self.pose([CLOSED, CLOSED, CLOSED, OPEN, 1226, KEEP], **kw)
 
     def release(self, **kw):
         """Alias of open_hand - park pose for leaving the hand unattended."""

@@ -39,7 +39,10 @@ import teleop_ui as ui
 # Defaults only. Every one of these is a command-line option now: the
 # settle gate exists because a pose used to cost two to three seconds, and
 # whether that is still true depends on the trigger the daemon is running.
-SETTLE_TOL = 120       # target units counted as "not moving"
+# A tolerance in target counts. It was set when a target count was 0.48
+# of an ANGLEACT count, so the 2026-08-06 scale correction shrinks it to
+# the same physical stillness: 120 old units = 58 ANGLEACT.
+SETTLE_TOL = 58
 
 sink = None                # where poses go; see hand_sink.open_sink
 settle_frames = 5          # 0 disables the gate entirely
@@ -50,7 +53,7 @@ cal_note = ""
 cal_grew = 0.0             # when the range last got bigger
 CAL_QUIET = 4.0            # save once no new extreme has shown up for this long
 CAL_NEED = {"curl_hi": 40, "abd": 15}   # the spread a usable window needs
-PARK = [2000] * 6          # every joint open - the pose to leave the hand in
+PARK = [hm.T_MAX] * 6      # every joint open - the pose to leave the hand in
 show_settings = False
 SET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teleop_settings.json")
 SETTINGS = {"force": 500, "speed": 1000, "device": 4, "ema": 65}

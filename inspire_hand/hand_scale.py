@@ -6,22 +6,24 @@ its mirror, and `verify()` checks the mirror against `hand_ctl scale`
 rather than trusting that a future edit touched both. Any Python code
 that converts between ANGLEACT and a command target imports from here.
 
-UNRESOLVED (2026-08-06): the command field may not be a 0..2000 scale at
-all but an ANGLEACT-style setpoint (~890..1850) - see hand_safety.h for
-the two observations behind that doubt. Settling it needs the hand. When
-it is settled, the numbers below change in one place and every caller
-follows; `verify()` is what will catch a half-finished change.
+SETTLED on the hand (2026-08-06): a command is an ANGLEACT setpoint, one
+count for one count - commanded 1100 read back 1101, 1272 read back 1274,
+1509 read back 1508, and 612 (below the closed end) drove the axis into
+the closed stop at 896. It was never a 0..2000 scale. The conversions
+below are therefore the identity, kept as functions so callers that speak
+through them keep working and so a unit with different travel has one
+place to change. See hand_safety.h for the same note on the C side.
 """
 import json
 import os
 import subprocess
 
-TARGET_MIN = 0
-TARGET_MAX = 2000
+TARGET_MIN = 890          # fully closed - the mechanism's own stop
+TARGET_MAX = 1850         # fully open
 TARGET_HOLD = -1          # leave the axis wherever it currently is
 
-ANG_CLOSED = 890          # ANGLEACT span measured on this unit
-ANG_OPEN = 1850
+ANG_CLOSED = 890          # ANGLEACT span measured on this unit - the same
+ANG_OPEN = 1850           # scale as the targets, not a second one
 
 HAND_CTL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_ctl")
 
@@ -39,9 +41,9 @@ def target_valid(tgt):
 
 
 def ang_to_target(ang):
-    """Where a joint actually sits, on the same scale the targets use."""
-    span = (int(ang) - ANG_CLOSED) * (TARGET_MAX - TARGET_MIN) / (ANG_OPEN - ANG_CLOSED)
-    return max(TARGET_MIN, min(TARGET_MAX, int(TARGET_MIN + span)))
+    """Where a joint actually sits, on the same scale the targets use -
+    which is the same number, clamped into travel."""
+    return max(TARGET_MIN, min(TARGET_MAX, int(ang)))
 
 
 def target_to_ang(tgt):
@@ -49,8 +51,7 @@ def target_to_ang(tgt):
     instead of being invented into a move."""
     if int(tgt) == TARGET_HOLD:
         return TARGET_HOLD
-    span = (clamp_target(tgt) - TARGET_MIN) * (ANG_OPEN - ANG_CLOSED) / (TARGET_MAX - TARGET_MIN)
-    return max(ANG_CLOSED, min(ANG_OPEN, int(ANG_CLOSED + span)))
+    return max(ANG_CLOSED, min(ANG_OPEN, int(tgt)))
 
 
 def as_dict():

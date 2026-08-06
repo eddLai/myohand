@@ -88,9 +88,9 @@ def main():
         stamps = hand_latency.Stamps()
         for step in range(60):
             stamps.frame()
-            v = 400 + step * 25
+            v = 1082 + step * 12          # target counts, ANGLEACT scale
             stamps.mapped()
-            sink.send([v, v, v, v, 900, 1500], stamps)
+            sink.send([v, v, v, v, 1322, 1610], stamps)
             time.sleep(0.02)
         time.sleep(0.5)
         check("a moving pose is streamed, not sent once", sink.sent >= 10,
@@ -99,7 +99,7 @@ def main():
         # and an unchanging pose stops costing anything
         before = sink.sent
         for _ in range(50):
-            sink.send([1900, 1900, 1900, 1900, 900, 1500])
+            sink.send([1802, 1802, 1802, 1802, 1322, 1610])
             time.sleep(0.02)
         time.sleep(0.3)
         settled = sink.sent - before

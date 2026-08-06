@@ -4,8 +4,8 @@
  *   hand_ctl state
  *   hand_ctl scale                          what the target numbers mean
  *   hand_ctl pose P R M I TB TR [force] [speed]
- *       targets 0..2000 (0=closed, 2000=open), -1 = leave axis unchanged
- *       the scale itself is defined once, in hand_safety.h
+ *       targets are ANGLEACT counts: ~890=closed, ~1850=open, -1 = leave
+ *       axis unchanged. The scale is defined once, in hand_safety.h
  *   $ECAT_IFACE selects the NIC (default eth0). Confirm with ecat_scan
  *   before assuming - the hand has answered on a different interface on
  *   every host that has driven it.
@@ -13,8 +13,10 @@
  * Behavior encodes the reverse-engineered F1 semantics:
  *   - boot lands all axes in STATUS=7 (standby); wiggle around current
  *     position wakes them before a pose is accepted
- *   - targets execute when the master disconnects (SM watchdog), so this
- *     tool writes the pose, holds briefly, then exits
+ *   - the firmware applies a pose when the sync-manager watchdog expires
+ *     (99.9 ms, measured), not while OPERATIONAL. Dropping the link is
+ *     one way to cause that and the way this tool uses, so it writes the
+ *     pose, holds briefly, then exits
  * Safety (shared driver layer, see hand_safety.c):
  *   - exclusive bus lock, range clamp, per-axis force/speed profile
  *   - joint interlock clamps poses that would jam index against thumb
@@ -149,7 +151,8 @@ int main(int argc, char **argv)
       /* driver-level gate: nothing reaches the PDO unchecked */
       guarded  = hs_stall_relief(tgt, &in[18], &in[30], &in[6], why, sizeof why);
       guarded += hs_interlock(tgt, &in[6], why, sizeof why);
-      /* write the requested pose; execution happens after we disconnect */
+      /* write the requested pose. It rides in the output buffer until the
+         SM watchdog expires, which the exit below causes by going away */
       for (i = 0; i < 6; i++) out[HS_OUT_TARGET + i] = tgt[i];
       for (t = 0; t < HOLD_MS; t++) { pd(); osal_usleep(1000); }
    }

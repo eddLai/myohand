@@ -19,17 +19,31 @@ Read them in this order — each one closes something.
 | `syncmode_freerun.txt` | `syncmode_test eth1 0` | Writing `0x1C32:01 = 0` for Free Run was **accepted** (reads back 0), reached OP, held 8 s — and changed nothing. Sync mode is not it either |
 | `wd_pace_baseline.txt` | `wd_pace eth1 2 0 6 100 1000` | The 100 ms window is narrow: it applies, but the next cycle drops out of OP with `AL=0x001b` |
 | `wd_pace_wd20ms.txt` | `wd_pace eth1 2 20 6` | The watchdog register **is writable** and a 20 ms setting does trigger the apply (`dANG=167`) — but the slave leaves OP each time, and at 20 ms even the recovery path starves it again |
+| `coe_startup.txt` | `coe_startup eth1 1000000` | `0x1C32:02` is **read-only** (`SDO abort 0x06010002`), so it is the slave's *measurement* of the SM2 interval, not a setting nobody wrote. It read 18 ms while we drove at 1 ms — and `0x1C32:12`, the cycle-exceeded counter, gained 4843 in eight seconds |
+| **`rate_sweep.txt`** | `rate_sweep eth1 2 4 1,2,3,4,5,6,8` | **The answer.** 1 ms: no motion, no current, cycle-exceeded +2244. **2 ms and every rate below it: ~180 counts of travel, 56-71 mA, cycle-exceeded 0, OPERATIONAL held throughout.** No watchdog anywhere near it |
 
 ## What the set proves together
 
-Six explanations were eliminated on hardware, not by argument: switch
-topology, distributed clocks, master cadence, `ENABLE_SET`, output image
-size, and sync mode. What is left is that this firmware applies its
-outputs only when the sync-manager watchdog expires — 99.9 ms as shipped.
+Read in order, these files record a wrong conclusion being reached and
+then overturned, so keep the order.
 
-The protocol floor is therefore about **200-400 ms per pose** (one watchdog
-plus one trip back to OPERATIONAL), not the 2-3 s this tree has been
-paying. Continuous following at 50-100 Hz is not reachable this way.
+Six explanations were eliminated on hardware: switch topology, distributed
+clocks, master cadence, `ENABLE_SET`, output image size, and sync mode.
+Those eliminations all still stand. What did not stand is the inference
+drawn from them — that the sync-manager watchdog must therefore be the
+trigger. A seventh possibility had not been considered.
+
+`rate_sweep` found it. **This hand cannot be driven at 1 kHz.** Its
+application needs more than a millisecond per cycle, and SM-Synchron
+starts a new cycle on every arriving frame, so a 1 kHz feed interrupts it
+forever and outputs are never applied. At 2 ms and slower it works
+perfectly, with the link up and OPERATIONAL held the whole time.
+
+So the cost of a pose is **2 ms, not 2-3 s**, and the only time constant
+left is the mechanism's own 800 ms full-travel. The "disconnect to
+execute" behaviour this tree was built around was ours, not the
+firmware's — starving the link for 100 ms worked because it finally
+stopped interrupting the slave, not because a timeout fired.
 
 ## Reproducing
 

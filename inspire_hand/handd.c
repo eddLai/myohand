@@ -13,24 +13,51 @@
  * ad-hoc script all reach the hand through this socket, and none of them
  * can route around hs_stall_relief / hs_interlock to do it.
  *
- * WHAT MAKES THE HAND EXECUTE is still an open question, so it is a
- * swappable strategy rather than a baked-in assumption:
+ * WHAT MAKES THE HAND EXECUTE was settled on hardware on 2026-08-06, and
+ * the answer is that nothing special does. This slave applies its outputs
+ * in OPERATIONAL like any other, as long as the master leaves it time to
+ * finish a cycle. Driving it at 1 kHz does not: 0x1C32:02 - read-only
+ * here, because in SM-Synchron that object is the slave's own measurement
+ * rather than a setting - reports an 18-27 ms application cycle, and
+ * 0x1C32:12, the cycle-exceeded counter, climbed about 600 a second under
+ * a 1 ms feed. Every frame was preempting the work the last one started.
+ * At 2 ms and slower the axis moves with the link up, OPERATIONAL held,
+ * and current flowing. See experiments/results_2026-08-06.
  *
- *   disconnect  (default)  write the target, hold briefly, drop the link
- *                          so the SM watchdog fires, reconnect. This is
- *                          the only path ever observed to drive this hand,
- *                          so it stays the default until something else is
- *                          measured to work. Do not delete it.
+ * That is also what the older "it only moves when you disconnect" reading
+ * really was: a disconnect, or 100 ms of silence, is simply the first
+ * time we stopped interrupting it. The trigger was never a timeout.
+ *
+ * So the default is to send poses and let the hand follow them. The rest
+ * remain as strategies because they are how every result before that day
+ * was measured, and a firmware update could bring them back:
+ *
+ *   continuous  (default)  write the target and keep cycling. Requires a
+ *                          period the slave can absorb - see --rate-hz,
+ *                          which defaults to 500 for that reason.
+ *   watchdog               write, then send nothing for longer than the
+ *                          sync-manager watchdog (99.9 ms, from ESC
+ *                          registers 0x0400/0x0420). The pose is applied
+ *                          and the slave drops to SAFE_OP+ERROR
+ *                          (AL=0x001b), so the strategy acknowledges the
+ *                          error and climbs back. A fallback for a unit
+ *                          that will not follow continuously.
+ *   disconnect             write, hold, drop the link, reconnect. The same
+ *                          silence, bought at the price of a full
+ *                          re-enumeration. The reference path: every
+ *                          pre-2026-08-06 measurement went through it.
  *   sync0                  arm distributed clocks and let the slave copy
- *                          its own PDO buffer on the Sync0 interrupt. Only
- *                          possible on a direct link - DC cannot traverse
- *                          an ethernet switch - and unproven on this hand.
+ *                          its own buffer on the Sync0 interrupt.
+ *                          MEASURED NOT TO WORK, though for a reason that
+ *                          now looks like the cycle time rather than DC:
+ *                          Sync0 at 1 ms is a 1 ms feed. Kept so the
+ *                          negative result can be reproduced.
  *
- * Both strategies share everything else: the loop, the socket, the guard,
+ * The strategies share everything else: the loop, the socket, the guard,
  * the telemetry, the timing. Swapping them is one function, by design.
  *
  * Usage:
- *   handd [--iface=NAME] [--trigger=disconnect|sync0] [--socket=PATH]
+ *   handd [--iface=NAME] [--trigger=watchdog|disconnect|sync0] [--socket=PATH]
  *         [--rate-hz=N] [--dc-cycle-us=N] [--dc-shift-us=N] [--force=N]
  *         [--speed=N] [--hold-ms=N] [--settle-ms=N] [--simulate]
  *
@@ -94,8 +121,10 @@ static struct {
    int dc_cycle_us;      /* 0 = follow the PDO period */
    int dc_shift_us;      /* how far ahead of the Sync0 edge to aim */
    int force, speed;
-   int hold_ms;          /* disconnect: how long the target rides before close */
+   int hold_ms;          /* how long a target rides before the trigger fires */
    int settle_ms;        /* disconnect: how long to stay down */
+   int starve_ms;        /* watchdog: how long to send nothing. 0 = read the
+                            slave's own watchdog time and add a margin */
    int move_step;        /* target change big enough to time a step response */
    int move_eps;         /* ANGLEACT change that counts as motion having begun */
    const char *lat_path; /* CSV of per-step latency breakdowns */
@@ -103,8 +132,22 @@ static struct {
    int rt_prio;          /* SCHED_FIFO priority, 0 = leave scheduling alone */
    int lock_memory;      /* mlockall, so a page fault cannot stall a cycle */
    int simulate;
-} cfg = { NULL, SOCKET_DEFAULT, "disconnect", 1000, 0, 50, 500, 1000, 120, 300,
-          200, 10, NULL, -1, 0, 0, 0 };
+} cfg = { NULL, SOCKET_DEFAULT, "continuous", 500, 0, 50, 500, 1000, 120, 300,
+          0, 96, 10, NULL, -1, 0, 0, 0 };
+/* rate_hz is 500 rather than 1000 because 1000 is the one rate this hand
+   cannot be driven at. rate_sweep on 2026-08-06 held OPERATIONAL and
+   stepped the middle finger at 1, 2, 3, 4, 5, 6 and 8 ms: every period
+   from 2 ms up moved the axis about 180 counts and drew 56-71 mA, and
+   1 ms moved it not at all and drew nothing. The slave says why in
+   0x1C32:12, its cycle-exceeded counter, which gained 2244 in four
+   seconds at 1 ms and exactly zero at every slower rate. Its application
+   cannot finish a cycle if a new SM2 event arrives every millisecond, so
+   outputs are never applied - which is the whole "the hand only moves
+   when you disconnect" story, and it was ours, not the firmware's.
+   500 Hz leaves a factor of two of margin under the measured limit. */
+/* move_step is 96 rather than the 200 it was before 2026-08-06: it is a
+   distance on the target scale, and that scale turned out to be ANGLEACT
+   counts, where 200 old units are 96. */
 
 /* ---- bus ------------------------------------------------------------ */
 
@@ -460,6 +503,7 @@ static void disc_on_target(void)
 
 static int bus_bringup(void);
 static void bus_close(void);
+static int op_request(void);
 static void apply_target(const int16_t *tgt, char *why, size_t n, int *guarded);
 
 static void disc_cycle(void)
@@ -504,6 +548,171 @@ static const trigger_t TRIG_DISCONNECT = {
    "disconnect",
    "write, hold, drop the link so the SM watchdog fires, reconnect",
    disc_arm, disc_on_target, disc_cycle, NULL, 1
+};
+
+/* -- watchdog: the trigger itself, with nothing torn down -------------
+ *
+ * watchdog_trigger.c separated the two things that a disconnect does at
+ * once. Keeping the socket open, the bus lock held and the process image
+ * mapped, and simply sending nothing for longer than the slave's
+ * sync-manager watchdog, applies the pose: 100 ms of silence moved the
+ * axis 98 counts with AL=0x0000 up to the moment it fired. The link never
+ * had to go away.
+ *
+ * The slave pays for it by leaving OPERATIONAL - the watchdog expiry IS
+ * the SAFE_OP+ERROR transition, AL=0x001b - so the strategy owns the
+ * recovery: acknowledge the error latch, get process data flowing again,
+ * and climb back. That is cheaper than ecx_close/ecx_init by everything
+ * enumeration and PDO mapping cost, which is most of the disconnect
+ * path's budget.
+ *
+ * The starve length is not a constant if it can be helped: the slave
+ * reports its own watchdog in 0x0400 (divider, 40 ns ticks) and 0x0420
+ * (process-data time, in those ticks), 99.9 ms on this unit, and the
+ * default adds a margin to whatever it says. --starve-ms overrides.
+ */
+enum { WD_IDLE, WD_HOLD };
+static int wd_state = WD_IDLE;
+static long wd_at;
+static int wd_ms_measured;        /* the slave's own watchdog, ms */
+static int wd_starve_ms;          /* what we actually wait */
+static int wd_fired, wd_recovered_hard;
+static int wd_pending;
+static int16_t wd_queued[6];
+
+static int wd_arm(void)
+{
+   uint16 div = 0, pdt = 0;
+
+   if (cfg.simulate)
+   {
+      wd_ms_measured = 100;
+      wd_starve_ms = cfg.starve_ms ? cfg.starve_ms : 120;
+      return 0;
+   }
+   ecx_FPRD(&ctx.port, ctx.slavelist[1].configadr, 0x0400, sizeof div, &div,
+            EC_TIMEOUTRET);
+   ecx_FPRD(&ctx.port, ctx.slavelist[1].configadr, 0x0420, sizeof pdt, &pdt,
+            EC_TIMEOUTRET);
+   div = etohs(div);
+   pdt = etohs(pdt);
+   /* divider counts 40 ns ticks; the process-data watchdog counts those */
+   wd_ms_measured = (int)(((double)div * 0.000040 * (double)pdt) + 0.5);
+   if (cfg.starve_ms)
+      wd_starve_ms = cfg.starve_ms;
+   else if (wd_ms_measured > 0 && wd_ms_measured < 5000)
+      wd_starve_ms = wd_ms_measured + 20;
+   else
+   {
+      wd_starve_ms = 120;
+      logf_("WARNING: the slave's watchdog registers read %u/%u, which is "
+            "not a usable time - falling back to a %d ms starve. If poses "
+            "stop executing, this is the first thing to check.",
+            div, pdt, wd_starve_ms);
+   }
+   logf_("watchdog trigger: slave watchdog %d ms (0x0400=%u 0x0420=%u), "
+         "starving %d ms per pose", wd_ms_measured, div, pdt, wd_starve_ms);
+   return 0;
+}
+
+static void wd_on_target(void)
+{
+   /* same reasoning as the disconnect strategy: time the window from the
+      first change since the last execution, or a client streaming at
+      50-100 Hz defers the trigger forever */
+   if (wd_state != WD_IDLE) return;
+   wd_state = WD_HOLD;
+   wd_at = now_ms() + cfg.hold_ms;
+}
+
+/* Bring the slave back after its watchdog fired. Returns 0 on success. */
+static int wd_recover(void)
+{
+   int i;
+
+   ecx_readstate(&ctx);
+   if (ctx.slavelist[1].state == EC_STATE_OPERATIONAL) return 0;
+
+   /* An error state latches: the slave will refuse to leave SAFE_OP+ERROR
+      until the master acknowledges it, and asking for OPERATIONAL without
+      the acknowledgement is the mistake that reads as "the hand died". */
+   ctx.slavelist[0].state = EC_STATE_SAFE_OP + EC_STATE_ACK;
+   ecx_writestate(&ctx, 0);
+   ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE);
+   for (i = 0; i < 20; i++) { pd(); osal_usleep(1000); }
+
+   if (op_request()) return 0;
+
+   /* the cheap path failed; fall back to the expensive one rather than
+      leaving a daemon that answers but cannot move anything */
+   logf_("watchdog recovery could not re-enter OPERATIONAL (state=0x%02x "
+         "AL=0x%04x) - falling back to a full reconnect",
+         ctx.slavelist[1].state, ctx.slavelist[1].ALstatuscode);
+   wd_recovered_hard++;
+   bus_close();
+   return bus_bringup();
+}
+
+static void wd_cycle(void)
+{
+   int rc;
+
+   if (wd_state != WD_HOLD || now_ms() < wd_at) return;
+
+   /* the silence IS the execution command on this firmware */
+   if (track.active && !track.t_exec) track.t_exec = now_ns();
+   wd_fired++;
+   wd_state = WD_IDLE;
+
+   if (cfg.simulate) return;   /* the stand-in applies targets continuously */
+
+   /* Send nothing at all. Not a shorter cycle, not empty frames - the
+      watchdog counts frames, so anything on the wire resets it. */
+   osal_usleep((unsigned)wd_starve_ms * 1000u);
+
+   rc = wd_recover();
+   if (rc)
+   {
+      logf_("bus did not come back after a watchdog trigger - stopping "
+            "rather than looping on a bus that is gone");
+      running = 0;
+      return;
+    }
+   /* Deliberately not re-asserting the last pose: it has been applied,
+      and re-writing it would look like a new command and schedule another
+      starve, forever. bus_bringup (if the hard path ran) parks holds. */
+   if (wd_pending)
+   {
+      char why[256] = {0};
+      int guarded = 0;
+      wd_pending = 0;
+      apply_target(wd_queued, why, sizeof why, &guarded);
+   }
+}
+
+static const trigger_t TRIG_WATCHDOG = {
+   "watchdog",
+   "write, then send nothing until the slave's own watchdog applies it",
+   wd_arm, wd_on_target, wd_cycle, NULL, 1
+};
+
+/* -- continuous: what an EtherCAT slave is supposed to need -----------
+ *
+ * Nothing to arm, nothing to do on a target, nothing to do per cycle: the
+ * loop already writes the guarded target into the output image every
+ * period, and the slave applies it. The whole strategy is the absence of
+ * one. It only became available when rate_sweep found that the feed rate,
+ * not the firmware, was what had been stopping it - so the thing this
+ * struct really carries is the rate requirement, which lives in
+ * --rate-hz and is checked at startup rather than assumed here. */
+static int  cont_arm(void)       { return 0; }
+static void cont_on_target(void) { }
+static void cont_cycle(void)     { }
+
+static const trigger_t TRIG_CONTINUOUS = {
+   "continuous",
+   "write the target and keep cycling; the slave applies it in OP",
+   cont_arm, cont_on_target, cont_cycle, NULL, 0
 };
 
 /* -- sync0: distributed clocks, unproven on this hand -----------------
@@ -584,7 +793,8 @@ static const trigger_t TRIG_SYNC0 = {
    sync0_arm, sync0_on_target, sync0_cycle, sync0_align_ns, 0
 };
 
-static const trigger_t *TRIGGERS[] = { &TRIG_DISCONNECT, &TRIG_SYNC0, NULL };
+static const trigger_t *TRIGGERS[] = { &TRIG_CONTINUOUS, &TRIG_WATCHDOG,
+                                       &TRIG_DISCONNECT, &TRIG_SYNC0, NULL };
 
 /* ---- bring-up ------------------------------------------------------- */
 
@@ -631,9 +841,38 @@ static const char *al_reading(uint16_t al)
    return "see the ETG AL status code table";
 }
 
+/* Ask for OPERATIONAL without ever letting the process data drop below
+   the loop rate. Cadence during the transition is not cosmetic: this
+   daemon used to send one frame per 50 ms statecheck - about 20 Hz - and
+   the 2026-08-06 runs showed that a slave with Sync0 armed refuses the
+   transition outright at that rate (AL=0x002d, "no sync"), while 1 kHz
+   through the whole transition reaches OP in 80-160 ms. Returns 1 on
+   OPERATIONAL. */
+static int op_request(void)
+{
+   int i;
+
+   if (cfg.simulate) return 1;
+   ctx.slavelist[0].state = EC_STATE_OPERATIONAL;
+   pd();
+   ecx_writestate(&ctx, 0);
+   for (i = 0; i < 2000; i++)
+   {
+      pd();
+      if (i % 20 == 0)
+      {
+         ecx_statecheck(&ctx, 0, EC_STATE_OPERATIONAL, 0);
+         if (ctx.slavelist[0].state == EC_STATE_OPERATIONAL) break;
+      }
+      osal_usleep(1000);
+   }
+   ecx_readstate(&ctx);
+   return ctx.slavelist[1].state == EC_STATE_OPERATIONAL;
+}
+
 static int bus_bringup(void)
 {
-   int chk, i, rc;
+   int i, rc;
 
    if (cfg.simulate)
    {
@@ -663,18 +902,12 @@ static int bus_bringup(void)
    memset(out, 0, ctx.slavelist[1].Obytes);
    for (i = 0; i < 6; i++) out[HS_OUT_TARGET + i] = HS_TGT_HOLD;
 
+   ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
+
    rc = trig->arm();
    if (rc) return rc;
 
-   ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
-   ctx.slavelist[0].state = EC_STATE_OPERATIONAL;
-   pd();
-   ecx_writestate(&ctx, 0);
-   chk = 200;
-   do { pd(); ecx_statecheck(&ctx, 0, EC_STATE_OPERATIONAL, 50000); }
-   while (chk-- && (ctx.slavelist[0].state != EC_STATE_OPERATIONAL));
-   ecx_readstate(&ctx);
-   if (ctx.slavelist[1].state != EC_STATE_OPERATIONAL) return 3;
+   if (!op_request()) return 3;
 
    bus_up = 1;
    out[0] = 1;                                  /* enable word */
@@ -816,12 +1049,22 @@ static void handle_line(client_t *c, char *line)
 
    if (!strcmp(cmd, "hello"))
    {
-      char js[160];
+      char js[160], tl[160];
+      const trigger_t **t;
+      int n = 0;
       hs_scale_json(js, sizeof js);
+      /* the strategies this build carries, so a client can tell whether it
+         is talking to a daemon that knows about the continuous path */
+      n += snprintf(tl + n, sizeof tl - n, "[");
+      for (t = TRIGGERS; *t && n < (int)sizeof tl - 2; t++)
+         n += snprintf(tl + n, sizeof tl - n, "%s\"%s\"",
+                       t == TRIGGERS ? "" : ",", (*t)->name);
+      snprintf(tl + n, sizeof tl - n, "]");
       creply(c, "{\"ok\":true,\"daemon\":\"handd\",\"trigger\":\"%s\","
+                "\"triggers\":%s,"
                 "\"rate_hz\":%d,\"force\":%d,\"speed\":%d,\"simulate\":%s,"
                 "\"scale\":%s}",
-             trig->name, cfg.rate_hz, cfg.force, cfg.speed,
+             trig->name, tl, cfg.rate_hz, cfg.force, cfg.speed,
              cfg.simulate ? "true" : "false", js);
    }
    else if (!strcmp(cmd, "scale"))
@@ -1141,15 +1384,20 @@ static void usage(void)
    fprintf(stderr,
       "usage: handd [options]\n"
       "  --iface=NAME       NIC the master opens (default $ECAT_IFACE, else eth0)\n"
-      "  --trigger=NAME     what makes the hand execute (default disconnect)\n"
+      "  --trigger=NAME     what makes the hand execute (default continuous)\n"
       "  --socket=PATH      unix socket clients connect to (default %s)\n"
-      "  --rate-hz=N        PDO cycle rate, 50..2000 (default 1000)\n"
+      "  --rate-hz=N        PDO cycle rate, 50..2000 (default 500).\n"
+      "                     Do NOT use 1000: measured 2026-08-06, this\n"
+      "                     hand applies no output at all at 1 kHz and\n"
+      "                     works at every rate 500 Hz and below.\n"
       "  --dc-cycle-us=N    sync0 period; 0 follows the PDO rate\n"
       "  --dc-shift-us=N    how far ahead of the Sync0 edge to aim (default 50)\n"
       "  --force=N          0..1000 (default 500)\n"
       "  --speed=N          50..1000 (default 1000)\n"
-      "  --hold-ms=N        disconnect: target rides this long before the drop\n"
+      "  --hold-ms=N        watchdog/disconnect: target rides this long first\n"
       "  --settle-ms=N      disconnect: how long the link stays down\n"
+      "  --starve-ms=N      watchdog: how long to send nothing. 0 (default)\n"
+      "                     reads the slave's own watchdog and adds 20 ms\n"
       "  --simulate         no bus; a stand-in slave for testing clients\n"
       "  --explain-al=CODE  read an AL status code aloud and exit\n"
       "  --latency-log=PATH CSV of the per-step latency breakdown\n"
@@ -1189,6 +1437,8 @@ static int parse_args(int argc, char **argv)
       { if (int_arg(val, "hold-ms", 0, 5000, &cfg.hold_ms)) return 1; }
       else if (!strncmp(a, "--settle-ms=", 12))
       { if (int_arg(val, "settle-ms", 0, 5000, &cfg.settle_ms)) return 1; }
+      else if (!strncmp(a, "--starve-ms=", 12))
+      { if (int_arg(val, "starve-ms", 0, 5000, &cfg.starve_ms)) return 1; }
       else if (!strncmp(a, "--explain-al=", 13))
       {
          /* the DC run's whole answer is a hex code in a log line; being

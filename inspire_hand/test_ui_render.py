@@ -28,14 +28,15 @@ STATES = [
     # name,            targets,        busy, actual,          headline, hint
     ("no-hand",        None,           False, None,           "Show your hand",
      "hold it in view of the camera"),
-    ("following",      [1500] * 6,     False, [1450] * 6,     "Following",
+    # target counts, ANGLEACT scale (~890 closed .. 1850 open)
+    ("following",      [1610] * 6,     False, [1586] * 6,     "Following",
      "streaming to daemon"),
-    ("guard-split",    [300] * 4 + [600, 1500], False,
-     [1200] * 4 + [600, 1500],                               "Hold still",
+    ("guard-split",    [1034] * 4 + [1178, 1610], False,
+     [1466] * 4 + [1178, 1610],                              "Hold still",
      "the pose sends once it settles"),
-    ("busy",           [800] * 6,      True,  [2000] * 6,     "Hand moving",
+    ("busy",           [1274] * 6,     True,  [1850] * 6,     "Hand moving",
      "mirroring the pose you held"),
-    ("calibrating",    [1000] * 6,     False, None,           "Calibrating",
+    ("calibrating",    [1370] * 6,     False, None,           "Calibrating",
      "fingers: open wide, then a full fist (12 of 40 deg)"),
 ]
 

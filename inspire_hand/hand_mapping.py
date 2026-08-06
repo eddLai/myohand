@@ -31,14 +31,17 @@ CURL_OPEN, CURL_CLOSED = 15.0, 150.0     # total curl in degrees
 THUMB_OPEN, THUMB_CLOSED = 15.0, 110.0
 ABD_MIN, ABD_MAX = 10.0, 50.0            # thumb abduction from the palm plane; see calibrate.py
 
-# Robot targets. T_MAX is the top of the scale; T_MIN sits above its
-# bottom on purpose - a teleop source should never command a full crush.
-T_MIN, T_MAX = 300, hand_scale.TARGET_MAX
-ROT_MIN = 700
+# Robot targets, in ANGLEACT counts (see hand_scale). T_MAX is the top of
+# the scale; T_MIN sits above its bottom on purpose - a teleop source
+# should never command a full crush. Both moved with the scale correction
+# of 2026-08-06: T_MIN was 300 and ROT_MIN 700 when a target was believed
+# to run 0..2000, and each is carried over to the position it named.
+T_MIN, T_MAX = 1034, hand_scale.TARGET_MAX
+ROT_MIN = 1226
 
 # The scale itself lives in hand_scale (mirroring hand_safety.h). Nothing
-# here recomputes it, so the open question about whether targets really
-# run 0..2000 is answered in one file.
+# here recomputes it, so what a target number means is answered in one
+# file.
 target_from_angle = hand_scale.ang_to_target
 
 
@@ -196,7 +199,7 @@ def thumb_abduction(lm):
 def pose_from_world_landmarks(lm):
     """Return [pinky, ring, middle, index, thumb_bend, thumb_rot] targets.
 
-    Targets follow the robot convention: 0 closed, 2000 open.
+    Targets are ANGLEACT counts: ~890 closed, ~1850 open.
     """
     tgt = []
     for name in ("pinky", "ring", "middle", "index"):
@@ -212,7 +215,7 @@ def pose_from_world_landmarks(lm):
 # --- the original image-space mapping, kept so the two can be compared ---
 FINGERS_LEGACY = {"pinky": (17, 20), "ring": (13, 16), "middle": (9, 12), "index": (5, 8)}
 R_MIN, R_MAX = 1.05, 1.85
-TH_MIN = 500
+TH_MIN = 1130          # was 500 before the 2026-08-06 scale correction
 
 
 def pose_legacy(lm):

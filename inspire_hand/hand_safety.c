@@ -14,19 +14,29 @@
 #define ANG_CLOSED 890
 #define ANG_OPEN   1850
 
-/* The four thresholds below are positions on the target scale, read off
-   the hand at the time. They are not derived from HS_TGT_MIN/MAX, so if
-   the scale question (see hand_safety.h) resolves the other way they have
-   to be re-measured, not rescaled by arithmetic. */
+/* The thresholds below are positions on the target scale, read off the
+   hand when the clash was observed. The scale changed under them on
+   2026-08-06 (see hand_safety.h), so each has been re-expressed in the
+   new units through the conversion that was in force when it was written
+   - ANGLEACT = 890 + old * 960 / 2000 - which preserves the physical
+   position each one meant. That is arithmetic, not a fresh measurement:
+   nobody has driven the index into the thumb again to confirm the angles.
+   Re-measuring needs somebody standing next to the hand, so until then
+   these are marked as inherited, and every one of them errs toward
+   leaving the thumb further clear rather than closer. */
 /* index and thumb-bend below this together drive the thumb into the
-   index mechanism (observed on-site: STA=5 current-protection stop) */
-#define CLEAR_IDX_THUMB 600
-/* a curled index also blocks the thumb's palm-ward rotation sweep */
-#define ROT_BLOCKED_BELOW 800
-#define ROT_SAFE          1200
+   index mechanism (observed on-site: STA=5 current-protection stop).
+   Was 600 on the old scale. */
+#define CLEAR_IDX_THUMB 1178
+/* a curled index also blocks the thumb's palm-ward rotation sweep.
+   Were 800 and 1200 on the old scale. */
+#define ROT_BLOCKED_BELOW 1274
+#define ROT_SAFE          1466
 
 #define STALL_CUR  400
-#define RELIEF     250
+/* how far toward open a stalled axis is backed off. A distance on the
+   target scale, so it converts like one: 250 old units = 120 ANGLEACT. */
+#define RELIEF     120
 
 #define THUMB_BEND_FORCE 1900   /* above the phantom force reading */
 #define THUMB_BEND_SPEED 500
@@ -82,20 +92,23 @@ int hs_target_valid(int16_t tgt)
    return tgt == HS_TGT_HOLD || (tgt >= HS_TGT_MIN && tgt <= HS_TGT_MAX);
 }
 
+/* Identity, clamped into travel: the command field IS ANGLEACT. The
+   compile-time check says so out loud, so a future edit that moves one
+   pair of bounds without the other fails to build instead of silently
+   reintroducing a conversion. */
+#if HS_TGT_MIN != ANG_CLOSED || HS_TGT_MAX != ANG_OPEN
+#error "target scale and ANGLEACT span must agree - they are the same scale"
+#endif
+
 int16_t hs_ang_to_target(int16_t ang)
 {
-   int t = HS_TGT_MIN + ((int)ang - ANG_CLOSED) * (HS_TGT_MAX - HS_TGT_MIN)
-                        / (ANG_OPEN - ANG_CLOSED);
-   return (int16_t)clampi(t, HS_TGT_MIN, HS_TGT_MAX);
+   return (int16_t)clampi(ang, HS_TGT_MIN, HS_TGT_MAX);
 }
 
 int16_t hs_target_to_ang(int16_t tgt)
 {
-   int a;
    if (tgt == HS_TGT_HOLD) return HS_TGT_HOLD;   /* no angle to name */
-   a = ANG_CLOSED + ((int)hs_clamp_target(tgt) - HS_TGT_MIN)
-                        * (ANG_OPEN - ANG_CLOSED) / (HS_TGT_MAX - HS_TGT_MIN);
-   return (int16_t)clampi(a, ANG_CLOSED, ANG_OPEN);
+   return (int16_t)clampi(tgt, ANG_CLOSED, ANG_OPEN);
 }
 
 int hs_scale_json(char *buf, size_t n)

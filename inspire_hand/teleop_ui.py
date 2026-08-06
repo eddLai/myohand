@@ -15,6 +15,20 @@ import math
 import cv2
 import numpy as np
 
+import hand_scale
+
+# The gauge draws a fraction of travel, so it has to know where travel
+# starts. It used to divide by a hardcoded 2000, which was both the wrong
+# number and the wrong shape - the bottom of the scale is 890, not 0, so
+# a fully closed finger drew as 45% filled. One import, no second copy.
+T_MIN, T_MAX = hand_scale.TARGET_MIN, hand_scale.TARGET_MAX
+ROT_TUCKED = 1226           # thumb rotation fully tucked, in target counts
+
+
+def _frac(target):
+    """Where a target sits in travel, 0.0 closed .. 1.0 open."""
+    return max(0.0, min(1.0, (target - T_MIN) / (T_MAX - T_MIN)))
+
 # ExoPulse palette, in BGR
 AMBER = (60, 132, 245)      # #F5843C  ready / commanded posture
 VIOLET = (217, 84, 140)     # #8C54D9  hand is executing
@@ -132,22 +146,21 @@ def draw_gauge(img, tgt, executing, actual=None):
     x = palm_x
     for label, idx, rel in FINGERS:
         length = int(BAR_MAX * rel)
-        frac = 0.0 if ghost else max(0.0, min(1.0, tgt[idx] / 2000))
+        frac = 0.0 if ghost else _frac(tgt[idx])
         _finger(img, x, base_y - 1, length, frac, tone)
         if actual:
-            _reached(img, x, base_y - 1, length,
-                     max(0.0, min(1.0, actual[idx] / 2000)), CREAM)
+            _reached(img, x, base_y - 1, length, _frac(actual[idx]), CREAM)
         if not ghost:
             cv2.putText(img, label, (x - 1, base_y + 46), METER, 0.8, QUIET, 1, cv2.LINE_AA)
         x += BAR_W + BAR_GAP
     # thumb hinges off the palm's outer edge; tucked at 108deg, splayed at 168deg
-    rot = 700 if ghost else max(700, min(2000, tgt[5]))
-    swing = 108 + (rot - 700) / 1300 * 60
+    rot = ROT_TUCKED if ghost else max(ROT_TUCKED, min(T_MAX, tgt[5]))
+    swing = 108 + (rot - ROT_TUCKED) / (T_MAX - ROT_TUCKED) * 60
     _thumb(img, (palm_x + 4, base_y + 18), 76,
-           0.0 if ghost else max(0.0, min(1.0, tgt[4] / 2000)), swing, tone)
+           0.0 if ghost else _frac(tgt[4]), swing, tone)
     if actual:
         _thumb_reached(img, (palm_x + 4, base_y + 18), 76,
-                       max(0.0, min(1.0, actual[4] / 2000)), swing, CREAM)
+                       _frac(actual[4]), swing, CREAM)
     if ghost:
         cv2.putText(img, "waiting for a hand", (x0 + 14, base_y + 46),
                     LABEL, 0.46, QUIET, 1, cv2.LINE_AA)

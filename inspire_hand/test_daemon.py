@@ -75,9 +75,14 @@ def main():
     if os.path.exists(args.latency_log):
         os.unlink(args.latency_log)
     log = open("/tmp/handd_test.log", "w+")
+    # The trigger is named explicitly rather than taken from the default,
+    # because the default changed on 2026-08-06 (to continuous, once the
+    # hand turned out to follow process data at a rate it can absorb) and
+    # the down/up assertions below are about the disconnect strategy
+    # specifically. The new default gets its own daemon further down.
     proc = subprocess.Popen(
         [args.daemon, "--simulate", f"--socket={args.socket}",
-         "--hold-ms=100", "--settle-ms=200",
+         "--trigger=disconnect", "--hold-ms=100", "--settle-ms=200",
          f"--latency-log={args.latency_log}"],
         stdout=log, stderr=subprocess.STDOUT)
     try:
@@ -92,6 +97,9 @@ def main():
         info = hand.hello()
         check("hello names the trigger it was started with",
               info["trigger"] == "disconnect", str(info))
+        check("the strategy list still carries every measured path",
+              set(info.get("triggers", [])) >=
+              {"continuous", "watchdog", "disconnect", "sync0"}, str(info))
         check("hello admits it is simulated", info["simulate"] is True)
         check("the daemon's scale matches hand_scale.py",
               info["scale"] == hand_scale.as_dict())
@@ -108,14 +116,14 @@ def main():
               7 not in st["sta"], str(st.get("sta")))
 
         # the guard has to act on a pose that closes index and thumb together
-        r = hand.target([0, 0, 0, 0, 0, 1500])
+        r = hand.target([890, 890, 890, 890, 890, 1610])
         check("a clashing pose is clamped by the daemon, not the client",
               r["guarded"] >= 1 and "thumb_bend" in r["guard_note"], str(r))
-        r = hand.target([2000, 2000, 2000, 2000, 2000, 2000])
+        r = hand.target([1850, 1850, 1850, 1850, 1850, 1850])
         check("an open hand passes the guard untouched", r["guarded"] == 0, str(r))
 
         # out-of-range clamps rather than dropping the frame
-        r = hand.target([9999, -400, -1, 1000, 1500, 1500])
+        r = hand.target([9999, -400, -1, 1370, 1610, 1610])
         check("out-of-range targets are accepted and clamped", r["ok"] is True)
 
         # A streaming client keeps pushing, which is the whole point of the
@@ -125,7 +133,7 @@ def main():
         opened = saw_down = saw_up = queued = False
         end = time.time() + 10
         while time.time() < end and not (opened and saw_down and saw_up and queued):
-            r = hand.target([2000] * 6)
+            r = hand.target([1850] * 6)
             queued = queued or bool(r.get("queued"))
             st = hand.state()
             if st.get("bus") == "down":
@@ -143,8 +151,8 @@ def main():
         # the latency ruler has to produce the same columns either way, and
         # it has to survive a client that sends no stamps at all
         stamps = hand_latency.Stamps()
-        for pose in ([300] * 4 + [700, 1500], [2000] * 6,
-                     [400] * 4 + [700, 1500], [1900] * 6):
+        for pose in ([1034] * 4 + [1226, 1610], [1850] * 6,
+                     [1082] * 4 + [1226, 1610], [1802] * 6):
             stamps.frame()
             time.sleep(0.03)                      # stand in for the camera
             stamps.mapped()
@@ -165,8 +173,10 @@ def main():
         check("cycle jitter is measured, not assumed",
               jit["samples"] > 100 and jit["p50"] >= 0 and
               jit["max"] >= jit["p95"] >= jit["p50"], str(jit))
+        period_us = 1000000 // info["rate_hz"]
         check("the loop keeps its period to well inside one cycle",
-              jit["p95"] < 1000000 // 1000, f"p95={jit['p95']}us of a 1000us cycle")
+              jit["p95"] < period_us,
+              f"p95={jit['p95']}us of a {period_us}us cycle")
 
         rows = hand_latency.read_csv(args.latency_log)
         stamped = [r for r in rows if r["vision_us"] > 0]
@@ -198,6 +208,44 @@ def main():
             check("a short target line is refused", "6 values" in str(e))
 
         hand.close()
+
+        # The default strategy, on its own daemon. Continuous is the one
+        # that does not take the bus away, so what it has to show is a
+        # pose being followed while the link stays up the entire time -
+        # the opposite of every assertion above.
+        cont_sock = args.socket + ".continuous"
+        cont = subprocess.Popen(
+            [args.daemon, "--simulate", f"--socket={cont_sock}"],
+            stdout=log, stderr=subprocess.STDOUT)
+        try:
+            if not wait_for(lambda: os.path.exists(cont_sock), timeout=10):
+                check("the default-trigger daemon opened its socket", False)
+            else:
+                c = hand_client.HandClient(path=cont_sock).connect()
+                hi = c.hello()
+                check("the default trigger is continuous",
+                      hi["trigger"] == "continuous", str(hi))
+                check("the default rate is one this hand can absorb",
+                      hi["rate_hz"] <= 500, str(hi["rate_hz"]))
+                never_down = True
+                moved = False
+                end = time.time() + 6
+                while time.time() < end and not moved:
+                    c.target([1850] * 6)
+                    st = c.state()
+                    if st.get("bus") == "down":
+                        never_down = False
+                    if min(st.get("ang", [0])) > 1500:
+                        moved = True
+                    time.sleep(0.01)
+                check("a pose is followed with no trigger step at all", moved)
+                check("the link is never taken away to make that happen",
+                      never_down)
+                c.close()
+        finally:
+            if cont.poll() is None:
+                cont.send_signal(signal.SIGTERM)
+                cont.wait(timeout=10)
 
         # and it shuts down on a signal without leaving its socket behind
         proc.send_signal(signal.SIGTERM)

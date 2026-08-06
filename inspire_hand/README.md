@@ -140,26 +140,38 @@ So `hs_ang_to_target` is a spurious conversion and the `0..2000` clamp
 admits values the mechanism cannot reach. Fixing it reaches into
 `hand_mapping.py` and `teleop_app.py`, so it is filed, not done.
 
-The firmware applies a pose only when the SM sync-manager watchdog
-expires — **99.9 ms**, read from ESC registers `0x0400`/`0x0420`. Dropping
-the link is one way to cause that and the way these tools use, but it is
-not required: starving process data for ~100 ms with the socket open and
-OPERATIONAL held applies the pose too, though the window before the slave
-falls out of OP is narrow.
+The hand applies a pose continuously, every cycle, exactly as an
+SM-Synchron slave should — **but only if process data arrives no faster
+than about 500 Hz**. At 1 kHz it applies nothing at all.
 
-Six other explanations were tested on a direct link and eliminated:
-switch topology, distributed clocks (Sync0 running, `DCactive=1`, OP held
-ten seconds, nothing moved), master cadence, `ENABLE_SET` (13 values plus
-a rising edge and a write-order swap), output image size (the compliant
-CoE map is 18 bytes and is refused with `AL=0x001e`), and sync mode
-(`0x1C32:01` reads SM-Synchron; writing Free Run was accepted and changed
-nothing). Full evidence in the ExoPulse_docs vault under
-`Execution_Trigger_Settled`.
+That was measured on 2026-08-06 with the link up, OPERATIONAL held, and
+every period far below the 99.9 ms watchdog, so no timeout was involved
+in any of it:
 
-Reaching OPERATIONAL costs only **80–160 ms** when process data flows at
-1 kHz through the whole transition, so the protocol floor is ~200–400 ms
-per pose, not the 2–3 s this tree has been paying. Continuous following
-at 50–100 Hz is not reachable over EtherCAT on this hand.
+| PDO period | travel | current | cycle-exceeded counter |
+|---|---|---|---|
+| 1 ms | 0 | 0 mA | **+2244 in 4 s** |
+| 2 ms | 181 | 62 mA | 0 |
+| 3-8 ms | ~180 | 56-71 mA | 0 |
+
+The slave's application needs more than a millisecond per cycle, and
+SM-Synchron starts a new cycle on every arriving frame, so a 1 kHz feed
+interrupts it before it can ever finish and the outputs are never copied.
+It says so itself in `0x1C32:12`, its cycle-exceeded counter, which no run
+read until that day. `0x1C32:05` advertises a 100 us minimum cycle; that
+figure is wrong on this device by an order of magnitude.
+
+So "the firmware executes a pose only after the master disconnects" was
+never true, and neither was the watchdog theory that replaced it.
+Starving the link for 100 ms worked for the same reason a slow feed does:
+it stops interrupting the slave. Every layer here paid 2-3 s per pose for
+a problem that was its own. Six other explanations were tested and
+eliminated first (switch topology, distributed clocks, master cadence
+during the transition, `ENABLE_SET`, output image size, sync mode); full
+evidence in `experiments/results_2026-08-06/`, written up in the
+ExoPulse_docs vault under `Execution_Trigger_Settled`.
+
+`handd` therefore defaults to `--rate-hz=500`. Do not raise it to 1000.
 
 Per-pose costs on the old path: `hand_ctl` ~10–20 s including the wake
 wiggle and telemetry, `hand_set` ~2–3 s. Most of that is process startup

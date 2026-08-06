@@ -98,7 +98,8 @@ for label, curl in (("open hand", 5.0), ("half curl", 35.0), ("fist", 70.0)):
 print(f"worst-case wander over all postures and views:")
 print(f"  joint angles on world landmarks : {worst_new} target units")
 print(f"  distance ratios on projected xy : {worst_old} target units")
-print(f"  (full travel is 1700 units, so {worst_old / 17:.0f}% of range for the old mapping)")
+print(f"  (full travel is {hm.T_MAX - hm.T_MIN} units, so "
+      f"{worst_old * 100.0 / (hm.T_MAX - hm.T_MIN):.0f}% of range for the old mapping)")
 
 
 # --- extremes: direction is a property of the mapping, reach is calibration ---

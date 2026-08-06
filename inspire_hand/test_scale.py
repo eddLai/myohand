@@ -2,10 +2,12 @@
 """Is there still exactly one definition of the target scale?
 
 The scale is the single most likely thing in this tree to be edited in
-one place and forgotten in another - the command field may not be 0..2000
-at all (see hand_safety.h), and the day that is settled, three files have
-to agree. So this checks the properties rather than the numbers, and then
-asks the C binary whether Python still matches it.
+one place and forgotten in another, and it has now been edited once: the
+command field is an ANGLEACT setpoint (~890..1850), not the 0..2000 this
+tree assumed until 2026-08-06 (see hand_safety.h for the measurements).
+So this checks the properties rather than the numbers, asserts the one
+number that correction turns on - that a target and an ANGLEACT are the
+same count - and then asks the C binary whether Python still matches it.
 
     python3 test_scale.py        (no hardware; `hand_ctl scale` moves nothing)
 """
@@ -49,6 +51,12 @@ check("clamp pulls overshoot to the ends",
 check("a hold is valid, other out-of-range values are not",
       sc.target_valid(sc.TARGET_HOLD) and not sc.target_valid(sc.TARGET_MAX + 1)
       and not sc.target_valid(sc.TARGET_MIN - 2))
+# the measured fact itself, so a reintroduced conversion fails here
+check("a target and an ANGLEACT are the same count",
+      all(sc.ang_to_target(a) == a
+          for a in (sc.ANG_CLOSED, 1101, 1274, 1508, sc.ANG_OPEN)))
+check("a command below the closed end names the stop, not a position",
+      sc.ang_to_target(612) == sc.TARGET_MIN and not sc.target_valid(612))
 
 # the mapping must read the scale rather than carry its own copy
 check("hand_mapping reads the scale instead of restating it",

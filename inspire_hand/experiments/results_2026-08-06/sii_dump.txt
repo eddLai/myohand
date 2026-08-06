@@ -1,0 +1,135 @@
+slave: name="SSC_Device" vendor=0x00000001 product=0x00009252 rev=0x00020111
+mailbox: mbx_proto=0x0004 mbx_l=128 mbx_wo=0x1000 mbx_rl=128 mbx_ro=0x1080   CoE=ADVERTISED
+mapped with CoE advertised: Obytes=18 Obits=144  Ibytes=76 Ibits=608
+mapped with mbx_proto=0:     Obytes=38 Obits=304  Ibytes=152 Ibits=1216   <- what the drivers use
+SII: read 1024 words
+
+== category 10 (STRINGS), 578 words at 0x042 ==
+== category 30 (GENERAL), 16 words at 0x286 ==
+== category 40 (FMMU), 2 words at 0x298 ==
+== category 41 (SYNCMANAGER), 16 words at 0x29c ==
+  SM0 start=0x1000 len=128  ctrl=0x26 enable=0x01 type=1 mbx out
+  SM1 start=0x1080 len=128  ctrl=0x22 enable=0x01 type=2 mbx in
+  SM2 start=0x1100 len=36   ctrl=0x64 enable=0x01 type=3 outputs (RxPDO)  [watchdog enabled]
+  SM3 start=0x1400 len=96   ctrl=0x20 enable=0x01 type=4 inputs (TxPDO)
+== category 50 (TXPDO), 308 words at 0x2ae ==
+  PDO 0x1a00  entries=76  assigned to SM3  name="PDOReadHand"
+    [ 0] word 0   0x6000:01 16  bit  "POSACT1"
+    [ 1] word 1   0x6000:02 16  bit  "POSACT2"
+    [ 2] word 2   0x6000:03 16  bit  "POSACT3"
+    [ 3] word 3   0x6000:04 16  bit  "POSACT4"
+    [ 4] word 4   0x6000:05 16  bit  "POSACT5"
+    [ 5] word 5   0x6000:06 16  bit  "POSACT6"
+    [ 6] word 6   0x6000:07 16  bit  "ANGLEACT1"
+    [ 7] word 7   0x6000:08 16  bit  "ANGLEACT2"
+    [ 8] word 8   0x6000:09 16  bit  "ANGLEACT3"
+    [ 9] word 9   0x6000:0a 16  bit  "ANGLEACT4"
+    [10] word 10  0x6000:0b 16  bit  "ANGLEACT5"
+    [11] word 11  0x6000:0c 16  bit  "ANGLEACT6"
+    [12] word 12  0x6000:0d 16  bit  "FORCEACT1"
+    [13] word 13  0x6000:0e 16  bit  "FORCEACT2"
+    [14] word 14  0x6000:0f 16  bit  "FORCEACT3"
+    [15] word 15  0x6000:10 16  bit  "FORCEACT4"
+    [16] word 16  0x6000:11 16  bit  "FORCEACT5"
+    [17] word 17  0x6000:12 16  bit  "FORCEACT6"
+    [18] word 18  0x6000:13 16  bit  "CURACT1"
+    [19] word 19  0x6000:14 16  bit  "CURACT2"
+    [20] word 20  0x6000:15 16  bit  "CURACT3"
+    [21] word 21  0x6000:16 16  bit  "CURACT4"
+    [22] word 22  0x6000:17 16  bit  "CURACT5"
+    [23] word 23  0x6000:18 16  bit  "CURACT6"
+    [24] word 24  0x6000:19 16  bit  "ERROR1"
+    [25] word 25  0x6000:1a 16  bit  "ERROR2"
+    [26] word 26  0x6000:1b 16  bit  "ERROR3"
+    [27] word 27  0x6000:1c 16  bit  "ERROR4"
+    [28] word 28  0x6000:1d 16  bit  "ERROR5"
+    [29] word 29  0x6000:1e 16  bit  "ERROR6"
+    [30] word 30  0x6000:1f 16  bit  "STATUS1"
+    [31] word 31  0x6000:20 16  bit  "STATUS2"
+    [32] word 32  0x6000:21 16  bit  "STATUS3"
+    [33] word 33  0x6000:22 16  bit  "STATUS4"
+    [34] word 34  0x6000:23 16  bit  "STATUS5"
+    [35] word 35  0x6000:24 16  bit  "STATUS6"
+    [36] word 36  0x6000:25 16  bit  "TEMP1"
+    [37] word 37  0x6000:26 16  bit  "TEMP2"
+    [38] word 38  0x6000:27 16  bit  "TEMP3"
+    [39] word 39  0x6000:28 16  bit  "TEMP4"
+    [40] word 40  0x6000:29 16  bit  "TEMP5"
+    [41] word 41  0x6000:2a 16  bit  "TEMP6"
+    [42] word 42  0x6000:2b 16  bit  "NormalForce1"
+    [43] word 43  0x6000:2c 16  bit  "TangentialForce1"
+    [44] word 44  0x6000:2d 16  bit  "Direction1"
+    [45] word 45  0x6000:2e 16  bit  "ProximityValue_L1"
+    [46] word 46  0x6000:2f 16  bit  "ProximityValue_H1"
+    [47] word 47  0x6000:30 16  bit  "NormalForce2"
+    [48] word 48  0x6000:31 16  bit  "TangentialForce2"
+    [49] word 49  0x6000:32 16  bit  "Direction2"
+    [50] word 50  0x6000:33 16  bit  "ProximityValue_L2"
+    [51] word 51  0x6000:34 16  bit  "ProximityValue_H2"
+    [52] word 52  0x6000:35 16  bit  "NormalForce3"
+    [53] word 53  0x6000:36 16  bit  "TangentialForce3"
+    [54] word 54  0x6000:37 16  bit  "Direction3"
+    [55] word 55  0x6000:38 16  bit  "ProximityValue_L3"
+    [56] word 56  0x6000:39 16  bit  "ProximityValue_H3"
+    [57] word 57  0x6000:3a 16  bit  "NormalForce4"
+    [58] word 58  0x6000:3b 16  bit  "TangentialForce4"
+    [59] word 59  0x6000:3c 16  bit  "Direction4"
+    [60] word 60  0x6000:3d 16  bit  "ProximityValue_L4"
+    [61] word 61  0x6000:3e 16  bit  "ProximityValue_H4"
+    [62] word 62  0x6000:3f 16  bit  "NormalForce5"
+    [63] word 63  0x6000:40 16  bit  "TangentialForce5"
+    [64] word 64  0x6000:41 16  bit  "Direction5"
+    [65] word 65  0x6000:42 16  bit  "ProximityValue_L5"
+    [66] word 66  0x6000:43 16  bit  "ProximityValue_H5"
+    [67] word 67  0x6000:44 16  bit  "Palm_NormalForce1"
+    [68] word 68  0x6000:45 16  bit  "Palm_TangentialForce1"
+    [69] word 69  0x6000:46 16  bit  "Palm_Direction1"
+    [70] word 70  0x6000:47 16  bit  "Palm_NormalForce2"
+    [71] word 71  0x6000:48 16  bit  "Palm_TangentialForce2"
+    [72] word 72  0x6000:49 16  bit  "Palm_Direction2"
+    [73] word 73  0x6000:4a 16  bit  "Palm_NormalForce3"
+    [74] word 74  0x6000:4b 16  bit  "Palm_TangentialForce3"
+    [75] word 75  0x6000:4c 16  bit  "Palm_Direction3"
+== category 51 (RXPDO), 80 words at 0x3e4 ==
+  raw:
+    01 16 13 02 00 52 00 00 00 70 01 53 03 10 00 00
+    00 70 02 54 03 10 00 00 00 70 03 55 03 10 00 00
+    00 70 04 56 03 10 00 00 00 70 05 57 03 10 00 00
+    00 70 06 58 03 10 00 00 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  PDO 0x1601  entries=19  assigned to SM2  name="DO Outputs"
+    [ 0] word 0   0x7000:01 16  bit  "ENABLE_SET"
+    [ 1] word 1   0x7000:02 16  bit  "ANGLESET1"
+    [ 2] word 2   0x7000:03 16  bit  "ANGLESET2"
+    [ 3] word 3   0x7000:04 16  bit  "ANGLESET3"
+    [ 4] word 4   0x7000:05 16  bit  "ANGLESET4"
+    [ 5] word 5   0x7000:06 16  bit  "ANGLESET5"
+    [ 6] word 6   0x0000:00 0   bit  ""
+    [ 7] word 6   0x0000:00 0   bit  ""
+    [ 8] word 6   0x0000:00 0   bit  ""
+    [ 9] word 6   0x0000:00 0   bit  ""
+    [10] word 6   0x0000:00 0   bit  ""
+    [11] word 6   0x0000:00 0   bit  ""
+    [12] word 6   0x0000:00 0   bit  ""
+    [13] word 6   0x0000:00 0   bit  ""
+    [14] word 6   0x0000:00 0   bit  ""
+    [15] word 6   0x0000:00 0   bit  ""
+    [16] word 6   0x0000:00 0   bit  ""
+    [17] word 6   0x0000:00 0   bit  ""
+    [18] word 6   0x0000:00 0   bit  ""
+
+== CoE mailbox test ==
+  (moved to PRE_OP so the mailbox is serviceable; state=0x02)
+  0x1000:00 DeviceType                                    = 89 13 00 00  (5001)
+  0x1008:00 DeviceName                                    = 4c 41 4e 39 32 35 32 5f 31 36 48 42 49 
+  0x1018:01 Identity.VendorID                             = 01 00 00 00  (1)
+  0x1c32:01 SM2 sync type (1=FreeRun 2=SM-sync 3=DC-sync0) = 01 00  (1)
+  0x1c32:02 SM2 cycle time ns                             = 88 b2 9b 01  (26981000)
+  0x1c33:01 SM3 sync type                                 = 22 00  (34)
+  0x1c12:00 RxPDO assign count                            = 01  (1)
+  0x1c13:00 TxPDO assign count                            = 01  (1)

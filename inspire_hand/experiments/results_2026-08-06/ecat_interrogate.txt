@@ -1,0 +1,167 @@
+=== enumeration on eth1 ===
+slaves=1
+  name        = "SSC_Device"
+  vendor      = 0x00000001   product = 0x00009252
+  revision    = 0x00020111   serial  = 0x00000000
+  configadr   = 0x1001   state = 0x01  AL = 0x0000
+  Obits/Ibits = 0 / 0   (config_map deliberately NOT called,
+                            so outputs=NULL - nothing can be driven)
+  hasdc       = 1   ptype = 0x1f  topology = 1  activeports = 0x1
+  mailbox     = wr 128 B @0x1000, rd 128 B @0x1080
+  mbx_proto   = AoE=0 EoE=0 CoE=1 FoE=0 SoE=0 VoE=0 (raw 0x0004)
+
+  SOEM's view of the sync managers:
+    SM0 start=0x1000 len=128 flags=0x00010026 type=1
+    SM1 start=0x1080 len=128 flags=0x00010022 type=2
+    SM2 start=0x1100 len=36 flags=0x00010064 type=3
+    SM3 start=0x1400 len=96 flags=0x00010020 type=4
+
+=== CoE (as discovered), mbx_proto=0x0004 ===
+  (requested PRE_OP for the mailbox; state=0x02 AL=0x0000)
+  0x1000:00 DeviceType             -> 5001 (0x00001389)
+  0x1008:00 DeviceName             -> [13 B] "LAN9252_16HBI" hex: 4c 41 4e 39 32 35 32 5f 31 36 48 42 49
+  0x1009:00 HwVersion              -> [3 B] "1.1" hex: 31 2e 31
+  0x100A:00 SwVersion              -> [3 B] "0.2" hex: 30 2e 32
+  0x1018:01 Identity/VendorID      -> 1 (0x00000001)
+  0x1018:02 Identity/ProductCode   -> 37458 (0x00009252)
+  0x1018:03 Identity/Revision      -> 131345 (0x00020111)
+  0x1018:04 Identity/Serial        -> 0 (0x00000000)
+
+  -- sync manager communication types --
+  0x1C00:00 SM count               -> 4 (0x04)
+  0x1C00:01 SM0 type               -> 1 (0x01)
+  0x1C00:02 SM1 type               -> 2 (0x02)
+  0x1C00:03 SM2 type               -> 3 (0x03)
+  0x1C00:04 SM3 type               -> 4 (0x04)
+
+  -- PDO assignment --
+  0x1C12:00 RxPDO assign count     -> 1 (0x01)
+  0x1C12:01 RxPDO assign[1]        -> 5633 (0x1601)
+  0x1C13:00 TxPDO assign count     -> 1 (0x01)
+  0x1C13:01 TxPDO assign[1]        -> 6656 (0x1a00)
+
+  -- RxPDO 0x1601, entry by entry (the output image we write) --
+  0x1601:00 0x1601 entry count     -> 19 (0x13)
+  0x1601:01 0x1601 entry[1]        -> 272 (0x0110)
+  0x1601:02 0x1601 entry[2]        -> 528 (0x0210)
+  0x1601:03 0x1601 entry[3]        -> 784 (0x0310)
+  0x1601:04 0x1601 entry[4]        -> 1040 (0x0410)
+  0x1601:05 0x1601 entry[5]        -> 1296 (0x0510)
+  0x1601:06 0x1601 entry[6]        -> 1552 (0x0610)
+  0x1601:07 0x1601 entry[7]        -> 1808 (0x0710)
+  0x1601:08 0x1601 entry[8]        -> 2064 (0x0810)
+  0x1601:09 0x1601 entry[9]        -> 2320 (0x0910)
+  0x1601:10 0x1601 entry[10]       -> 2576 (0x0a10)
+  0x1601:11 0x1601 entry[11]       -> 2832 (0x0b10)
+  0x1601:12 0x1601 entry[12]       -> 3088 (0x0c10)
+  0x1601:13 0x1601 entry[13]       -> 3344 (0x0d10)
+  0x1601:14 0x1601 entry[14]       -> 3600 (0x0e10)
+  0x1601:15 0x1601 entry[15]       -> 3856 (0x0f10)
+  0x1601:16 0x1601 entry[16]       -> 4112 (0x1010)
+  0x1601:17 0x1601 entry[17]       -> 4368 (0x1110)
+  0x1601:18 0x1601 entry[18]       -> 4624 (0x1210)
+  0x1601:19 0x1601 entry[19]       -> 4880 (0x1310)
+  0x1601:20 0x1601 entry[20]       -> FAILED (wkc=0)
+        soem: Time:1785986877.568 SDO slave:1 index:1601.14 error:06090011 Subindex does not exist
+
+  -- TxPDO 0x1A00 --
+  0x1A00:00 0x1A00 entry count     -> 76 (0x4c)
+
+  -- 0x1C32 (SM2 = outputs, the one that matters) --
+  0x1C32:01 sync type              -> 1 (0x0001)
+      => SM-Synchron - app runs on the SM2 event (data arrival)
+  0x1C32:02 cycle time ns          -> 26981000 (0x019bb288)
+  0x1C32:04 supported modes        -> 16415 (0x401f)
+      supported: FreeRun=1 SM-Synchron=1 DC=subordinated  (raw 0x401f)
+  0x1C32:05 min cycle time         -> 100000 (0x000186a0)
+  0x1C32:06 calc+copy time         -> 0 (0x00000000)
+  0x1C32:09 delay time             -> 0 (0x00000000)
+  0x1C32:10 sync0 cycle time       -> 1000000 (0x000f4240)
+  0x1C32:11 cycle exceeded ct      -> 0 (0x0000)
+  0x1C32:12 shift too short        -> 8258 (0x2042)
+
+  -- 0x1C33 (SM3 = inputs) --
+  0x1C33:01 sync type              -> 34 (0x0022)
+      => Synchron with SM2 event
+  0x1C33:02 cycle time ns          -> 26981000 (0x019bb288)
+  0x1C33:04 supported modes        -> 16415 (0x401f)
+      supported: FreeRun=1 SM-Synchron=1 DC=subordinated  (raw 0x401f)
+  0x1C33:05 min cycle time         -> 100000 (0x000186a0)
+  0x1C33:06 calc+copy time         -> 0 (0x00000000)
+  0x1C33:09 delay time             -> 0 (0x00000000)
+  0x1C33:10 sync0 cycle time       -> 16960 (0x00004240)
+  0x1C33:11 cycle exceeded ct      -> 0 (0x0000)
+  0x1C33:12 shift too short        -> 8258 (0x2042)
+
+=== ESC registers (read directly, mailbox not involved) ===
+  0x0000 type=0xc0  rev=0x03  build=0x0000
+  0x0004 FMMUs=8  SMs=8  RAM=8 KB  portdesc=0x1f
+  0x0008 features=0x01cc  DC=yes  DCwidth=64bit
+  0x0100 DLctrl=0x00070001   0x0110 DLstatus=0x5617
+  0x0120 ALctrl=0x0012  0x0130 ALstatus=0x0002  0x0134 ALstatuscode=0x0000
+
+  sync manager registers (0x0800 + 8n) - live, not from EEPROM:
+    SM0 start=0x1000 len=128  enable=1
+        control 0x26: mode=mailbox dir=ECAT write / PDI read ecatIRQ=0 pdiIRQ=1 watchdog=off
+        status  0x02: intW=0 intR=1 mbxFull=0 bufState=0 readBufInUse=0 writeBufInUse=0
+    SM1 start=0x1080 len=128  enable=1
+        control 0x22: mode=mailbox dir=ECAT read / PDI write ecatIRQ=0 pdiIRQ=1 watchdog=off
+        status  0x80: intW=0 intR=0 mbxFull=0 bufState=0 readBufInUse=0 writeBufInUse=1
+    SM2 start=0x0000 len=0    enable=0
+        control 0x00: mode=buffered dir=ECAT read / PDI write ecatIRQ=0 pdiIRQ=0 watchdog=off
+        status  0x30: intW=0 intR=0 mbxFull=0 bufState=3 readBufInUse=0 writeBufInUse=0
+    SM3 start=0x0000 len=0    enable=0
+        control 0x00: mode=buffered dir=ECAT read / PDI write ecatIRQ=0 pdiIRQ=0 watchdog=off
+        status  0x30: intW=0 intR=0 mbxFull=0 bufState=3 readBufInUse=0 writeBufInUse=0
+
+  watchdog:
+    0x0400 divider          = 2498  (x40ns = 99.920 us)
+    0x0410 WD time PDI      = 1000  -> 99.9 ms
+    0x0420 WD time procdata = 1000  -> 99.9 ms  <= THE number the 2-3 s budget never measured
+    0x0440 WD status procdata = 0x0000 (bit0=1 means not expired)
+    0x0442 WD counter procdata = 29   0x0443 WD counter PDI = 1
+
+  distributed clocks:
+    0x0910 system time      = 839302077692939408
+    0x0918 sys time offset  = 58802072091610
+    0x0928 sys time delay   = 0
+    0x092C sys time diff    = 0x00000000
+    0x0980 cyclic unit ctrl = 0x00
+    0x0981 activation       = 0x00  cyclicEnable=0 Sync0gen=0 Sync1gen=0 autoAct=0
+    0x0982 pulse length     = 5000 (x10ns)
+    0x098E Sync0 status     = 0x00
+    0x09A0 cyclic start     = 1000000
+    0x09A0+ Sync0 cycle     = 0 ns   Sync1 cycle = 0 ns
+
+=== EEPROM / SII ===
+  fixed area: mbx proto word 0x1C = 0x0004 -> AoE=0 EoE=0 CoE=1 FoE=0 SoE=0 VoE=0 (raw 0x0004)
+  (this is the EEPROM's own claim about CoE, independent of
+   whatever config_init concluded above)
+  rx mbx @0x1000 size 128   tx mbx @0x1080 size 4224
+
+  category walk from word 0x0040:
+    cat 10  len 578  words  @0x0040  (STRINGS)
+    cat 30  len 16   words  @0x0284  (GENERAL)
+      CoE details 0x00: SDO=0 SDOinfo=0 PDOassign=0 PDOconfig=0 uploadAtStartup=0 completeAccess=0
+      FoE details 0x23  EoE details 0x00
+    cat 40  len 2    words  @0x0296  (FMMU)
+    cat 41  len 16   words  @0x029a  (SM)
+      SM0 EEPROM: start=0x1000 len=128  ctrl=0x26 enable=1 type=1
+                  control decodes to: mode=mailbox dir=ECAT write / PDI read ecatIRQ=0 pdiIRQ=1 watchdog=off
+      SM1 EEPROM: start=0x1080 len=128  ctrl=0x22 enable=1 type=2
+                  control decodes to: mode=mailbox dir=ECAT read / PDI write ecatIRQ=0 pdiIRQ=1 watchdog=off
+      SM2 EEPROM: start=0x1100 len=36   ctrl=0x64 enable=1 type=3
+                  control decodes to: mode=buffered dir=ECAT write / PDI read ecatIRQ=0 pdiIRQ=1 watchdog=ENABLED
+      SM3 EEPROM: start=0x1400 len=96   ctrl=0x20 enable=1 type=4
+                  control decodes to: mode=buffered dir=ECAT read / PDI write ecatIRQ=0 pdiIRQ=1 watchdog=off
+      ^ compare against the live 0x0800 block above. The
+        bring-up log claims EEPROM SYNCM and firmware do
+        not agree; this is where that shows up.
+    cat 50  len 308  words  @0x02ac  (TxPDO)
+    cat 51  len 80   words  @0x03e2  (RxPDO)
+    cat 60  len 12   words  @0x0434  (DC)
+      raw words: 0000 0000 0000 0000 0000 0000 0001 0000 0001 0403 0000 0000
+      ^ ETG.1000 category 60 lists the cyclic operation
+        modes the device declares it supports.
+
+(link closed; nothing was written, no IOmap was ever built)

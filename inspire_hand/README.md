@@ -130,17 +130,36 @@ stays. `python3 hand_mapping.py` lists them, `--profile NAME` picks one.
 ## Axis order and semantics (F1, reverse-engineered)
 
 Order: `[pinky, ring, middle, index, thumb_bend, thumb_rot]`.
-Targets: `0` = closed, `2000` = open, `-1` = leave unchanged — **probably**.
-`hand_ctl scale` is the authority; see the note under Safety for why that
-sentence has a "probably" in it.
+Targets: `-1` = leave unchanged. The rest is **not** `0..2000`, and the
+code has not caught up yet — `hand_ctl scale` still reports the old scale.
+Measured three ways on 2026-08-06: parking `1100` gave `ANGLEACT` `1101`,
+`1272` gave `1274`, and commanding `1509` landed on `1508`. **Targets are
+ANGLEACT counts, one for one, roughly `890` closed to `1850` open.** A
+target below ~`890` drives into the closed stop instead of to the number.
+So `hs_ang_to_target` is a spurious conversion and the `0..2000` clamp
+admits values the mechanism cannot reach. Fixing it reaches into
+`hand_mapping.py` and `teleop_app.py`, so it is filed, not done.
 
-The firmware appears to execute a pose only AFTER the master disconnects.
-Held in OPERATIONAL at 1 kHz for ten and a half seconds, the hand did not
-move and drew 0 mA the whole time; it moved after the link dropped. But
-that test ran with distributed clocks never configured and the hand behind
-a lab switch, and DC cannot cross a switch — so the finding is real and
-its cause is not settled. The decisive experiment is one cable move away
-and is described in the ExoPulse_docs vault under `Persistent_OP_Probe`.
+The firmware applies a pose only when the SM sync-manager watchdog
+expires — **99.9 ms**, read from ESC registers `0x0400`/`0x0420`. Dropping
+the link is one way to cause that and the way these tools use, but it is
+not required: starving process data for ~100 ms with the socket open and
+OPERATIONAL held applies the pose too, though the window before the slave
+falls out of OP is narrow.
+
+Six other explanations were tested on a direct link and eliminated:
+switch topology, distributed clocks (Sync0 running, `DCactive=1`, OP held
+ten seconds, nothing moved), master cadence, `ENABLE_SET` (13 values plus
+a rising edge and a write-order swap), output image size (the compliant
+CoE map is 18 bytes and is refused with `AL=0x001e`), and sync mode
+(`0x1C32:01` reads SM-Synchron; writing Free Run was accepted and changed
+nothing). Full evidence in the ExoPulse_docs vault under
+`Execution_Trigger_Settled`.
+
+Reaching OPERATIONAL costs only **80–160 ms** when process data flows at
+1 kHz through the whole transition, so the protocol floor is ~200–400 ms
+per pose, not the 2–3 s this tree has been paying. Continuous following
+at 50–100 Hz is not reachable over EtherCAT on this hand.
 
 Per-pose costs on the old path: `hand_ctl` ~10–20 s including the wake
 wiggle and telemetry, `hand_set` ~2–3 s. Most of that is process startup
@@ -173,10 +192,14 @@ a safe pose instead of failing. `hand_ctl` reports what it changed in
 
 **The target scale is defined once**, in `hand_safety.h` — `hs_clamp_target`,
 `hs_target_valid`, `hs_ang_to_target`, `hs_target_to_ang`. Nothing else in
-the C tree divides by the span or clamps against a literal 0/2000, because
-whether the command field really is `0..2000` rather than an ANGLEACT-style
-`890..1850` is **still unresolved** and settling it needs the hand. Python
-mirrors it in `hand_scale.py` and verifies itself against `hand_ctl scale`.
+the C tree divides by the span or clamps against a literal 0/2000. That
+discipline is what makes the pending correction a small change: the
+question it was hedging against is now **settled — the command field is
+ANGLEACT-style `890..1850`, not `0..2000`** (see Axis order above), so
+`hs_ang_to_target` should collapse to identity and the clamp should move
+to the real travel. Until that lands, every layer is consistently wrong in
+the same place rather than inconsistently wrong in six. Python mirrors it
+in `hand_scale.py` and verifies itself against `hand_ctl scale`.
 
 Offline checks, none of which need hardware:
 

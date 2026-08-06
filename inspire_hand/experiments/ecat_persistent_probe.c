@@ -49,6 +49,8 @@
 #define MOVED        30      /* ANGLEACT delta hand_op3 used to call motion */
 #define MAX_SAMPLES  6000
 #define MAX_DURATION 60
+#define DC_SETTLE_MS 500     /* 1 kHz PD either side of arming Sync0 */
+#define OP_WAIT_MS   2000    /* OP request waits inside the 1 kHz loop */
 
 /* input layout, matching hand_ctl's telemetry dump */
 #define IN_POS 0
@@ -113,7 +115,10 @@ static int bringup(const char *iface)
 
    if (!ecx_init(&ctx, iface)) return 1;
    if (ecx_config_init(&ctx) <= 0) return 2;
-   ctx.slavelist[1].mbx_proto = 0;   /* dead CoE mailbox on this SSC build */
+   ctx.slavelist[1].mbx_proto = 0;   /* NOT because CoE is dead - it answers
+      every SDO. Zeroing it makes SOEM size the output image from the SII
+      at 38 bytes, the only layout this firmware accepts; mapping over CoE
+      yields 18 and is refused with AL=0x001e. */
    ecx_config_map_group(&ctx, IOmap, 0);
    if (ctx.slavelist[1].Ibytes < 36 * 2 || ctx.slavelist[1].Obytes < 19 * 2)
       return 4;
@@ -127,26 +132,43 @@ static int bringup(const char *iface)
    for (i = 1; i <= 6; i++) out[i] = -1;
 
    /* hasdc comes from config_init; configdc then measures propagation
-      delay and sets the system-time offsets. Sync0 is armed before the
-      OP request so the slave is already generating the interrupt by the
-      time it starts consuming process data. */
+      delay and sets the system-time offsets.
+      The order below is not cosmetic. The 2026-08-06 direct-link run
+      refused OPERATIONAL with AL=0x002d ("no sync") because this
+      function used to arm Sync0 with no process data flowing and then
+      request OP while sending a frame only once per 50 ms statecheck -
+      about 20 Hz against a Sync0 running at 1 kHz. dc_check.c isolated
+      it: the same slave, same cable, same 1 ms Sync0 reaches OP and
+      holds it when the 1 kHz PDO loop runs THROUGH the arming and the
+      state transition. So: reach SAFE_OP, get process data moving, arm,
+      let it run, and only then ask for OP - never letting the loop drop
+      below 1 kHz. */
    dc_hasdc = ctx.slavelist[1].hasdc;
+   ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
    dc_configured = ecx_configdc(&ctx) ? 1 : 0;
+   cyc(DC_SETTLE_MS);
    if (dc_us > 0)
    {
       if (!dc_hasdc) return 5;
       ecx_dcsync0(&ctx, 1, TRUE, (uint32_t)dc_us * 1000u, 0);
+      cyc(DC_SETTLE_MS);
    }
    dc_active = ctx.slavelist[1].DCactive;
    dc_pdelay = ctx.slavelist[1].pdelay;
 
-   ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
    ctx.slavelist[0].state = EC_STATE_OPERATIONAL;
    pd();
    ecx_writestate(&ctx, 0);
-   chk = 200;
-   do { pd(); ecx_statecheck(&ctx, 0, EC_STATE_OPERATIONAL, 50000); }
-   while (chk-- && (ctx.slavelist[0].state != EC_STATE_OPERATIONAL));
+   for (chk = 0; chk < OP_WAIT_MS; chk++)
+   {
+      pd();
+      if (chk % 100 == 0)
+      {
+         ecx_statecheck(&ctx, 0, EC_STATE_OPERATIONAL, 0);
+         if (ctx.slavelist[0].state == EC_STATE_OPERATIONAL) break;
+      }
+      osal_usleep(1000);
+   }
    ecx_readstate(&ctx);
    if (ctx.slavelist[1].state != EC_STATE_OPERATIONAL) return 3;
    return 0;
@@ -205,6 +227,7 @@ int main(int argc, char **argv)
    int16_t center, ang_start, ang_preclose = 0, ang_postclose = 0;
    int16_t park_tgt;
    int max_dev = 0, dev_postclose = 0;
+   uint16 state_end = 0, al_end = 0;
    long t0, t, last_flip = 0, last_log = -LOG_EVERY_MS;
    int high = 0;
    char why[256] = {0};
@@ -314,11 +337,35 @@ int main(int argc, char **argv)
       osal_usleep(1000);
    }
 
+   /* A flat trace only means "did not execute" if the slave was still in
+      OPERATIONAL while it stayed flat. Inputs keep arriving in
+      SAFE_OP+ERROR too, so the trace alone cannot tell the two apart -
+      ask the state machine before the link goes down. */
+   ecx_readstate(&ctx);
+   state_end = ctx.slavelist[1].state;
+   al_end = ctx.slavelist[1].ALstatuscode;
+
    /* Park a target that is unambiguously away from where the axis started,
       and carry it through the close. Zeroing to -1 here would make the
       disconnect latch "no change" and the post-close branch of the
-      experiment could never fire. center+AMP is the open-ward end. */
-   park_tgt = (int16_t)(center + AMP);
+      experiment could never fire.
+      Which endpoint that is depends on where the axis started. The
+      open-ward end used to be hardcoded here, and on 2026-08-06 that
+      quietly voided the post-close half of every run: the fingers rest
+      at their open stop, so the centre had been shifted down by AMP and
+      center+AMP landed back exactly on the start pose - the probe parked
+      the axis where it already was and then reported "no motion after
+      the disconnect". Pick the far endpoint instead. Both are inside
+      free travel by construction, since the oscillation just swung
+      through them. */
+   {
+      int16_t tgt_start = hs_ang_to_target(ang_start);
+      int d_hi = (center + AMP) - tgt_start;
+      int d_lo = (center - AMP) - tgt_start;
+      if (d_hi < 0) d_hi = -d_hi;
+      if (d_lo < 0) d_lo = -d_lo;
+      park_tgt = (int16_t)(d_hi >= d_lo ? center + AMP : center - AMP);
+   }
    out[HS_OUT_TARGET + axis] = park_tgt;
    for (i = 0; i < PARK_MS; i++)
    {
@@ -359,6 +406,10 @@ int main(int argc, char **argv)
           dc_us, dc_hasdc, dc_configured, dc_active, dc_pdelay);
    printf("wake=%s after %dms\n", wake_ok ? "ok" : "FAILED (axes still STA=7)",
           wake_ms);
+   printf("state at end of open window: 0x%02x AL=0x%04x%s\n",
+          state_end, al_end,
+          state_end == EC_STATE_OPERATIONAL ? " (held OPERATIONAL)"
+                                            : " - NOT OP, the flat trace proves nothing");
    if (why[0]) printf("interlock: %s\n", why);
    printf("ang_start=%d ang_preclose=%d max_dANG_open=%d (moved > %d)\n",
           ang_start, ang_preclose, max_dev, MOVED);
@@ -372,6 +423,11 @@ int main(int argc, char **argv)
    if (max_dev > MOVED)
       printf("verdict: LIVE - the axis tracked the target with the link "
              "open; the disconnect-to-execute assumption is false\n");
+   else if (state_end != EC_STATE_OPERATIONAL)
+      printf("verdict: INCONCLUSIVE - the slave was not in OPERATIONAL at "
+             "the end of the window (state=0x%02x AL=0x%04x), so a flat "
+             "trace says nothing about the disconnect question\n",
+             state_end, al_end);
    else if (reconnected && dev_postclose > MOVED)
       printf("verdict: DISCONNECT-GATED - flat while open, moved only "
              "after ecx_close\n");

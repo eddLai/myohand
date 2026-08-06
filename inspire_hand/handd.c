@@ -514,10 +514,14 @@ static const trigger_t TRIG_DISCONNECT = {
  * targets sit in the buffer unread - and "the hand only moves when you
  * disconnect" would be our omission rather than its design.
  *
- * The 2026-08-05 attempt refused OPERATIONAL with AL=0x002d and reported
- * pdelay=0, because the hand was behind a lab switch and distributed
- * clocks cannot traverse one. Everything here is therefore written but
- * unproven; it needs the direct link.
+ * 2026-08-06 settled it, and the answer is no. On a direct link with no
+ * switch, Sync0 armed and DCactive=1, the slave held OPERATIONAL for ten
+ * seconds with AL=0x0000 and the axis still never moved and never drew a
+ * milliamp. The sync mode is not the mechanism either: CoE reports
+ * 0x1C32:01=1, SM-Synchron, and writing 0x1C32:01=0 for Free Run was
+ * accepted and changed nothing. The trigger is the SM watchdog. What
+ * follows is correct EtherCAT and irrelevant to moving this hand.
+ * See the vault's Execution_Trigger_Settled.
  */
 static int64_t dc_period_ns;
 static int64_t dc_delta_ns;      /* last measured distance from the edge */
@@ -539,14 +543,13 @@ static int sync0_arm(void)
    dc_active = ctx.slavelist[1].DCactive;
    dc_pdelay = ctx.slavelist[1].pdelay;
 
-   /* A measured propagation delay of zero is physically nonsense unless
-      the link was never measured, which is exactly what a store-and-
-      forward switch produces. Say so here rather than leaving it to be
-      rediscovered from an AL code further down. */
+   /* pdelay=0 was once read here as the signature of a switch in the path.
+      It is not: on a bus with one slave, that slave IS the reference
+      clock, so zero propagation delay is the correct measurement rather
+      than a missing one. Logged as a fact, not a warning. */
    if (dc_pdelay == 0)
-      logf_("WARNING: pdelay=0 after configdc - nothing measured the link. "
-            "That is what a switch in the path looks like, and DC cannot "
-            "work through one. Expect AL=0x002d next.");
+      logf_("pdelay=0 after configdc - expected on a single-slave bus, "
+            "where the only slave is the reference clock.");
    return 0;
 }
 
@@ -615,9 +618,9 @@ static const char *al_reading(uint16_t al)
                           "arriving";
       case 0x002d: return "No Sync Error - the slave is in a DC sync mode "
                           "and the Sync0 signal it expects is not arriving. "
-                          "With pdelay=0 this is the signature of a switch "
-                          "in the path: DC cannot traverse one. Move the "
-                          "hand's RJ45 to a direct link";
+                          "Seen on this hand even on a direct link, and a "
+                          "dead end regardless: DC is not what makes it "
+                          "apply outputs";
       case 0x0030: return "DC Invalid Sync Configuration";
       case 0x0032: return "DC Sync started while the PLL was not locked";
       case 0x0033: return "DC Invalid Sync Cycle Time";
@@ -645,7 +648,10 @@ static int bus_bringup(void)
 
    if (!ecx_init(&ctx, cfg.iface)) return 1;
    if (ecx_config_init(&ctx) <= 0) return 2;
-   ctx.slavelist[1].mbx_proto = 0;   /* dead CoE mailbox on this SSC build */
+   ctx.slavelist[1].mbx_proto = 0;   /* NOT because CoE is dead - it answers
+      every SDO. Zeroing it makes SOEM size the output image from the SII
+      at 38 bytes, the only layout this firmware accepts; mapping over CoE
+      yields 18 and is refused with AL=0x001e. */
    ecx_config_map_group(&ctx, IOmap, 0);
    if (ctx.slavelist[1].Ibytes < 36 * 2 || ctx.slavelist[1].Obytes < 19 * 2)
       return 4;

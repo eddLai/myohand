@@ -1,0 +1,23 @@
+axis=2 ang_start=1789 target=1509 dc=0us wake=ok(1ms) state=0x08
+------------------------------------------------------------------------------
+hold     enable=1, target constant    dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=0                 dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=1                 dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=2                 dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=3                 dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=4                 dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=7                 dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=15                dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=63                dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=255               dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=256               dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=257               dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=4096              dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+enable   ENABLE_SET=-1                dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+edge     ENABLE_SET 0->1, target held dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+after    target written with enable=1 dANG=0     maxCUR=0     ang=1789 sta=1 err=0
+------------------------------------------------------------------------------
+state before close: 0x08 AL=0x0000
+close    link dropped, 4s wait        dANG=-281  ang=1508 (target was 1509)
+------------------------------------------------------------------------------
+verdict: nothing in OPERATIONAL moved it, the disconnect did. Every candidate above is ruled out

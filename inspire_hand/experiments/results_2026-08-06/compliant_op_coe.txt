@@ -1,0 +1,8 @@
+=== mode=coe  iface=eth1  axis=2 ===
+slave advertises mbx_proto=0x0004 (CoE=1)
+  -> mbx_proto left as advertised (compliant; never tried before)
+mapped: Obytes=18 Obits=144  Ibytes=76 Ibits=608  (owords=9)
+SM2 after map: start=0x1100 len=18   SM3: start=0x1400 len=76
+SAFE_OP: state=0x12 AL=0x001e
+OP request (1 kHz throughout, 2000 ms): state=0x12 AL=0x001e
+verdict: NEVER REACHED OP in mode coe - nothing was driven

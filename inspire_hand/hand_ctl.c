@@ -99,7 +99,10 @@ int main(int argc, char **argv)
    if (lock_fd < 0) fail("bus busy: another master holds the hand (20s timeout)");
    if (!ecx_init(&ctx, iface)) fail("ecx_init (need CAP_NET_RAW or root; check $ECAT_IFACE)");
    if (ecx_config_init(&ctx) <= 0) fail("no EtherCAT slave (check link/power; run ecat_scan on $ECAT_IFACE)");
-   ctx.slavelist[1].mbx_proto = 0; /* dead CoE mailbox on this SSC build */
+   ctx.slavelist[1].mbx_proto = 0;   /* NOT because CoE is dead - it answers
+      every SDO. Zeroing it makes SOEM size the output image from the SII
+      at 38 bytes, the only layout this firmware accepts; mapping over CoE
+      yields 18 and is refused with AL=0x001e. */
    ecx_config_map_group(&ctx, IOmap, 0);
    ecx_statecheck(&ctx, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
    ctx.slavelist[0].state = EC_STATE_OPERATIONAL;

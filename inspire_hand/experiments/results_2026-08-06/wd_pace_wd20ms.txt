@@ -1,0 +1,15 @@
+OP reached in 300 ms
+watchdog as found: div=2498 pd=1000 -> 99.9 ms
+watchdog reprogrammed: asked 20 ms -> wrote 200, reads back 200 -> 49920.0 ms
+starve per cycle: 25 ms (watchdog 20.0 ms), settle 1000 ms
+telemetry: STA=[2 2 2 2 2 2] ANG=[1804 1786 1312 1782 1375 1048] CUR=[0 0 0 0 0 0]
+axis=2 ang_start=1312 alternating 1512 <-> 1312 over 6 cycles
+
+cyc  target  ang_before  ang_after  dANG  cycle_ms  state  AL
+1    1512    1312        1479       167   1859      0x14   0x001b  MOVED
+      slave left OPERATIONAL - stopping before it is pushed further
+
+watchdog restored to 1000
+
+1/0 cycles moved; OPERATIONAL WAS LOST
+verdict: PARTIAL - 1 of 0 cycles applied; the margin is too tight at this setting

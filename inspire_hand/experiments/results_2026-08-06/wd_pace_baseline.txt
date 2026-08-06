@@ -1,0 +1,13 @@
+OP reached in 120 ms
+watchdog as found: div=2498 pd=1000 -> 99.9 ms
+starve per cycle: 100 ms (watchdog 99.9 ms), settle 1000 ms
+telemetry: STA=[2 2 0 2 2 2] ANG=[1804 1786 1310 1782 1375 1049] CUR=[0 0 0 0 0 0]
+axis=2 ang_start=1310 alternating 1510 <-> 1310 over 6 cycles
+
+cyc  target  ang_before  ang_after  dANG  cycle_ms  state  AL
+1    1510    1310        1319       9     1931      0x08   0x0000
+2    1310    1319        1329       10    1979      0x14   0x001b
+      slave left OPERATIONAL - stopping before it is pushed further
+
+0/1 cycles moved; OPERATIONAL WAS LOST
+verdict: NOTHING MOVED at this watchdog setting

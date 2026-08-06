@@ -1,0 +1,11 @@
+axis=2 wake=ok(1ms) state=0x08
+slave watchdog: WD_DIV=2498 WD_TIME_PD=1000 -> 99.9 ms   SM2 ctrl=0x64
+------------------------------------------------------------------------------
+round  starve   target  ang_before  ang_after  dANG   state  AL      re-OP
+1      50       1408    1508        1506       -2     0x08   0x0000  -
+2      100      1406    1506        1408       -98    0x08   0x0000  -   <== MOVED
+3      200      1308    1329        1310       -19    0x14   0x001b  NO
+could not get back to OP - stopping
+------------------------------------------------------------------------------
+A round that moved means the SM watchdog is the trigger and the link never had to
+drop. All rounds flat means the trigger needs the link itself to go away.

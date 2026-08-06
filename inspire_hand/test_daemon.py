@@ -57,11 +57,14 @@ def main():
         return 0
 
     # the AL code is the whole answer when a DC run fails, so the daemon has
-    # to be able to read one aloud without one having to happen first
+    # to be able to read one aloud without one having to happen first. It
+    # used to blame 0x002d on a switch in the path; the 2026-08-06 direct
+    # link reproduced the same code with no switch anywhere, so that
+    # reading is now asserted to be gone rather than present.
     al = subprocess.run([args.daemon, "--explain-al=0x002d"],
                         capture_output=True, text=True).stdout
-    check("AL 0x002d is explained, switch and all",
-          "No Sync Error" in al and "switch" in al, al.strip())
+    check("AL 0x002d is explained, and not blamed on a switch",
+          "No Sync Error" in al and "switch" not in al.lower(), al.strip())
 
     # and an unknown trigger must never fall back to the default
     bad = subprocess.run([args.daemon, "--trigger=nonsense"],

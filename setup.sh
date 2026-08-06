@@ -7,7 +7,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "[1/4] python venv + pinned deps"
-test -d venv || python3 -m venv venv
+# mediapipe 0.10.21 is the last release with the legacy solutions API the
+# camera/teleop code uses, and it ships no wheels for python >= 3.13
+PY="$(command -v python3.10 || command -v python3.11 || command -v python3.12 || command -v python3)"
+test -d venv || "$PY" -m venv venv
 venv/bin/pip install -q -r requirements.txt
 
 echo "[2/4] SOEM clone + cmake build"

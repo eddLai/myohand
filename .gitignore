@@ -1,1 +1,17 @@
 data/gestures_set/
+venv/
+__pycache__/
+*.log
+*.o
+
+# runtime state written by the apps (per-operator, not source)
+camera/calibration.json
+teleop/teleop_settings.json
+
+# built binaries and vendor clones
+hand_fw/hand_ctl
+hand_fw/test_safety
+hand_fw/soem_build/SOEM/
+hand_fw/soem_build/build/
+hand_fw/soem_build/hand_set
+hand_fw/experiments/ecat_scan

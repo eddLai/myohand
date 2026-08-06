@@ -74,8 +74,12 @@ on the socket reports the same live, plus how late each wake-up was.
 The board is not PREEMPT_RT, so: `--cpu=3 --rt-prio=80 --lock-memory`.
 Each says in its own log line whether it took effect — do not read jitter
 from a run that printed a WARNING. `./experiments/rt_check.sh` reports
-what else is in the way. Measured on the KD240 at 1 kHz, worst-case
-wake-up lateness under six busy loops: **3052 µs untuned, 121 µs tuned**.
+what else is in the way. Measured on the KD240 at 1 kHz against the
+simulated slave, worst-case wake-up lateness under six busy loops:
+**3052 µs untuned, 121 µs tuned**. The rate is historical — the daemon
+runs at 500 Hz now, since 1 kHz is the one rate this hand applies nothing
+at — and the numbers only get easier with twice the period, so they still
+bound what a 2 ms loop has to survive.
 
 ## Quick use
 

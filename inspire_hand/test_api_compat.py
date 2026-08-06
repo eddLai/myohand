@@ -162,6 +162,19 @@ def main():
         # and the fallback: kill the daemon under it, the call must survive
         hand.close()
         check("close() releases the daemon", hand.via == "hand_ctl")
+
+        # `with` has to close on every path, including an exception, or a
+        # long-lived caller leaks a connection per use
+        with hand_api.InspireHand(socket_path=args.socket) as h:
+            check("with-block connects", h.via == "daemon", h.via)
+        check("with-block closed on the way out", h.via == "hand_ctl", h.via)
+        try:
+            with hand_api.InspireHand(socket_path=args.socket) as h2:
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        check("with-block closes even when the body raises",
+              h2.via == "hand_ctl", h2.via)
     finally:
         proc.send_signal(subprocess.signal.SIGTERM)
         proc.wait(timeout=10)

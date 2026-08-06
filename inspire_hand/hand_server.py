@@ -86,4 +86,16 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"inspire_hand server on {BIND}:{PORT} (localhost-only, tunnel in)")
-    ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()
+    srv = ThreadingHTTPServer((BIND, PORT), Handler)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopping")
+    finally:
+        # The kernel would free the port either way, but shutdown() lets
+        # in-flight requests finish instead of being cut mid-reply, and
+        # closing the hand releases whatever path it took - a daemon
+        # socket, or nothing if it was the subprocess path.
+        srv.shutdown()
+        srv.server_close()
+        hand.close()

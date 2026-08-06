@@ -110,6 +110,19 @@ class InspireHand:
             self._client.close()
             self._client = None
 
+    # `with InspireHand() as hand:` so a caller can guarantee the daemon
+    # connection is dropped on every path, including an exception. The
+    # kernel would close the socket at exit anyway; what this buys is a
+    # long-lived program - hand_server, a notebook - not accumulating one
+    # connection per handler while the daemon counts them against
+    # MAX_CLIENTS.
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
     def state(self):
         """Read telemetry without moving anything."""
         if not self._client:

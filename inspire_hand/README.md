@@ -148,14 +148,33 @@ says so ("Ready - press space to send this pose"). **OPEN HAND** sends
 regardless of SYNC, which makes it the fastest way to prove the chain is
 alive.
 
-Ctrl+C stops everything, including the camera. `teleop_app.py` handles
-SIGINT and SIGTERM by asking its loop to stop, and releases the camera and
-the sink in a `finally` - before that the release sat after the loop, an
-interrupt never reached it, and `/dev/video0` stayed held by a process that
-was already gone, so the next run blocked on opening it. A wrapper cannot
-fix that from outside: an OpenCV read does not reliably hand control back
-to Python in time for a handler, so the flag has to be checked by the loop
-itself.
+## Interrupting anything
+
+Ctrl+C releases what was held, on every entry point, and
+`test_release.py` starts each one for real, interrupts it, and asks the
+kernel whether the resource came back.
+
+Worth being precise about what needs guaranteeing. File descriptors -
+cameras, sockets, `flock` - the kernel reclaims when a process dies, even
+on SIGKILL. What needs help is that the process **actually dies** when
+asked, and the two things the kernel will not undo: a child it spawned,
+and a hand left mid-motion.
+
+| Entry point | On interrupt |
+|---|---|
+| `teleop_app.py` | SIGINT/SIGTERM set a flag the loop checks; camera and sink released in a `finally` |
+| `handd` | SIGINT/SIGTERM/SIGHUP; unlinks its socket, drops the bus lock, leaves the hand parked |
+| `hand_server.py` | `shutdown()` lets in-flight requests finish, then `server_close()` and releases the hand |
+| `verify_following.py` | parks the axis it was sweeping instead of leaving it chasing a sine |
+| `HandSetSink` | `close()` stops the `hand_set` it spawned — an orphan would keep the bus lock |
+| `run_teleop.sh` | one EXIT trap stops teleop first, then the daemon, but only one it started |
+| `InspireHand` | usable as `with InspireHand() as hand:` |
+
+teleop was the one that actually broke: it handled no signals, and
+`cap.release()` sat after the main loop, on the one path an interrupt
+never takes. A wrapper cannot fix that from outside — an OpenCV read does
+not reliably hand control back to Python in time for a handler, so the
+flag has to be checked by the loop itself.
 
 `run_teleop.sh` only stops a daemon it started itself. If one is already
 answering it says so and leaves it alone, because killing something
@@ -360,6 +379,7 @@ Offline checks, none of which need hardware:
     python3 test_mapping.py           # the mapping is viewpoint-invariant
     python3 test_ui_render.py         # the panel draws, with no display
     python3 test_api_compat.py        # both paths present the same API
+    python3 test_release.py           # interrupting anything frees what it held
 
 ## Build and setup (from a clean clone)
 

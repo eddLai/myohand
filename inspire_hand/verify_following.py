@@ -90,7 +90,9 @@ def main():
     rows = []
     t0 = time.time()
     sent = 0
-    while True:
+    interrupted = False
+    try:
+      while True:
         t = time.time() - t0
         if t >= args.secs:
             break
@@ -106,13 +108,27 @@ def main():
         slack = dt - ((time.time() - t0) - t)
         if slack > 0:
             time.sleep(slack)
+    except KeyboardInterrupt:
+        # Ctrl+C mid-sweep would otherwise leave the axis chasing whichever
+        # point of the sine it was on. Park it and report what there is.
+        interrupted = True
+        print("\ninterrupted - parking the axis")
 
     # park it back in the middle and let go
     targets = [-1] * 6
     targets[args.axis] = args.centre
-    hand.target(targets)
-    time.sleep(0.8)
-    final = hand.state()
+    try:
+        hand.target(targets)
+        time.sleep(0.8)
+        final = hand.state()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"could not park: {e}")
+        hand.close()
+        return 1
+    if interrupted and not rows:
+        print("stopped before any samples were taken")
+        hand.close()
+        return 1
 
     # --- what happened ---
     cmds = [r[1] for r in rows]
@@ -152,12 +168,15 @@ def main():
     # A run that followed has to cover most of the commanded swing and keep
     # drawing current; anything less is drift, not tracking.
     ok = act_p2p >= 0.6 * cmd_p2p and max_cur > 10
-    print("\n" + ("FOLLOWING - the hand tracked a target that never stopped "
-                  "moving, with the link up the whole time"
-                  if ok else
-                  "NOT FOLLOWING - see the numbers above"))
+    if interrupted:
+        print("\nINTERRUPTED - the numbers above are from a partial run")
+    else:
+        print("\n" + ("FOLLOWING - the hand tracked a target that never "
+                      "stopped moving, with the link up the whole time"
+                      if ok else
+                      "NOT FOLLOWING - see the numbers above"))
     hand.close()
-    return 0 if ok else 1
+    return 0 if (ok and not interrupted) else 1
 
 
 if __name__ == "__main__":

@@ -85,9 +85,13 @@ class DryRunSink(Sink):
 
 
 class HandSetSink(Sink):
-    """One `hand_set` process per pose. Slow by construction: it feeds the
-    slave at 1 kHz, which this hand applies nothing at, so the pose lands
-    when the process exits and the frames stop."""
+    """One `hand_set` process per pose - slow by construction, because
+    every pose pays for a fresh enumeration and wake.
+
+    Not because of the hand: hand_set cycles at 500 Hz since 2026-08-06 and
+    the pose executes while it is still connected. What costs the seconds
+    is spawning and connecting, once per pose, which is exactly what the
+    daemon sink exists to stop paying."""
 
     name = "hand_set"
     deadband = 120            # a resend costs seconds, so only for real moves
@@ -97,7 +101,11 @@ class HandSetSink(Sink):
         super().__init__()
         self.binary = binary or os.path.join(HERE, "soem_build", "hand_set")
         self.force, self.speed, self.timeout = force, speed, timeout
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()        # one pose at a time
+        # A second lock, because _lock is held for the whole pose and
+        # close() has to be able to look at the child while that is true.
+        self._proc_lock = threading.Lock()
+        self._proc = None
         if not os.path.exists(self.binary):
             raise FileNotFoundError(
                 f"{self.binary} is not built - run `make all` in "
@@ -114,12 +122,20 @@ class HandSetSink(Sink):
         self.busy = True
         try:
             t0 = self.started = time.perf_counter()
-            r = subprocess.run(
-                [self.binary] + [str(int(v)) for v in targets]
-                + [str(self.force), str(self.speed)],
-                capture_output=True, text=True, timeout=self.timeout)
+            # Popen rather than run() so close() has something to stop. The
+            # thread is a daemon and dies with the process, but the child it
+            # spawned does not - it keeps running and keeps the bus lock,
+            # and the next master to start finds the bus busy for no reason
+            # anyone can see.
+            with self._proc_lock:
+                self._proc = subprocess.Popen(
+                    [self.binary] + [str(int(v)) for v in targets]
+                    + [str(self.force), str(self.speed)],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True)
+            stdout, _ = self._proc.communicate(timeout=self.timeout)
             dt = time.perf_counter() - t0
-            out = (r.stdout + r.stderr).strip().splitlines()
+            out = (stdout or "").strip().splitlines()
             self._read_back(out)
             guarded = any("guard" in ln for ln in out)
             self.last_result = (f"held back a clash  {dt:.1f}s" if guarded
@@ -129,9 +145,30 @@ class HandSetSink(Sink):
             self.last_result = ("hand did not answer - check its power and "
                                 "the RJ45 link")
         finally:
+            with self._proc_lock:
+                self._proc = None
             self.started = None
             self.busy = False
             self._lock.release()
+
+    def close(self):
+        """Stop the pose that is in flight, if there is one.
+
+        The worker runs in a daemon thread, so it dies with the process -
+        but the hand_set it spawned does not. An orphan keeps the bus lock
+        until it finishes on its own, and until then the next master to
+        start reports the bus busy with nothing visibly holding it. TERM
+        first so it can park the pose it was given, KILL if it will not."""
+        with self._proc_lock:
+            proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
 
     def _read_back(self, lines):
         """hand_set already prints where the joints ended up; keep it."""

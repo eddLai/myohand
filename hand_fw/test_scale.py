@@ -14,7 +14,11 @@ same count - and then asks the C binary whether Python still matches it.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+# hand_mapping lives in camera/ since the restructure; hand_scale stays here.
+# Both paths are anchored to this file, so the cwd does not matter.
+sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "camera")))
 
 import hand_mapping as hm
 import hand_scale as sc

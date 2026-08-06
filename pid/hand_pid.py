@@ -22,8 +22,13 @@ command a clash. Held axes (-1) are never corrected.
 
 import json
 import os
+import sys
 import time
 
+# hand_scale is the one definition of the target scale and lives in
+# hand_fw/; anchor to this file so test_pid.py works from any cwd.
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "hand_fw")))
 import hand_scale
 
 AXES = 6

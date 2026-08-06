@@ -15,6 +15,9 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+# hand_mapping lives in camera/ since the restructure, and this path is
+# anchored to this file rather than the cwd.
+sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "camera")))
 
 import hand_mapping as hm                                   # noqa: E402
 

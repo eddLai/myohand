@@ -14,7 +14,10 @@ Where those targets go is a choice now, not a constant:
   --sink=daemon    (default) stream into handd at --rate Hz. Continuous
                    following: the pose is pushed as it changes.
   --sink=hand_set  one subprocess per pose, the path that predates the
-                   daemon. A pose costs two to three seconds, so the
+                   daemon. On that path a pose costs two to three seconds
+                   - the cost of spawning and reconnecting per pose, not
+                   of the hand, which follows continuously at 500 Hz - so
+                   the
                    settle gate turns itself on.
   --sink=none      dry run. The camera, the mapping and the whole window
                    work with no hand and no daemon.
@@ -37,7 +40,9 @@ import hand_sink
 import teleop_ui as ui
 
 # Defaults only. Every one of these is a command-line option now: the
-# settle gate exists because a pose used to cost two to three seconds, and
+# settle gate exists because a pose costs two to three seconds on the
+# hand_set path - a cost that path imposes, not one the hand does; the
+# daemon path has no reason for it and defaults it off. Historically it
 # whether that is still true depends on the trigger the daemon is running.
 # A tolerance in target counts. It was set when a target count was 0.48
 # of an ANGLEACT count, so the 2026-08-06 scale correction shrinks it to

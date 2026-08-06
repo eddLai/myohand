@@ -40,7 +40,10 @@
  * 1200, 1300, 1500, 1800, 2000, 3000. Everything is far below the 99.9 ms
  * watchdog, so no step here can be a timeout.
  *
- * Usage: why_1khz <iface> [axis 0-5] [secs_per_step] [p1,p2,... in us]
+ * Usage: why_1khz <iface> [axis 0-5, or -1 for all six] [secs_per_step]
+ *                  [p1,p2,... in us]
+ *   axis -1 drives all six through hs_interlock, which is the load the
+ *   daemon actually puts on the slave.
  */
 #include "soem/soem.h"
 #include "hand_safety.h"
@@ -106,7 +109,7 @@ static int sdo16(uint16 idx, uint8 sub, uint16 *v)
 
 int main(int argc, char **argv)
 {
-   int axis = AX_MIDDLE, secs = 4;
+   int axis = AX_MIDDLE, secs = 4, all = 0;
    int i, s, lock_fd, chk;
    uint32 calccopy = 0, mincyc = 0;
 
@@ -128,7 +131,9 @@ int main(int argc, char **argv)
       }
       if (!nper) { printf("empty period list\n"); return 1; }
    }
-   if (axis < 0 || axis > 5) { printf("axis 0-5\n"); return 1; }
+   if (axis == -1) { all = 1; axis = AX_MIDDLE; }
+   else if (axis < 0 || axis > 5)
+   { printf("axis 0-5, or -1 for all six\n"); return 1; }
    if (secs < 1 || secs > 15) { printf("secs 1..15\n"); return 1; }
 
    lock_fd = hs_lock(20);
@@ -197,26 +202,50 @@ int main(int argc, char **argv)
           "\"nothing written since the last read\";\n0-2 name which of the "
           "three buffers was written last. rdInUse is the PDI - the hand's\n"
           "own controller - holding a buffer open to read it.\n\n");
-   printf("period_us  frames  dANG  maxCUR  meas_us  cycExc(+)  "
-          "bufState 0/1/2/3        rdInUse  wrInUse\n");
+   printf("period_us  frames  %s  maxCUR  meas_us  cycExc(+)  "
+          "bufState 0/1/2/3        rdInUse  wrInUse\n",
+          all ? "minD" : "dANG");
 
    out[0] = 1;
    for (s = 0; s < nper; s++)
    {
       int p = periods_us[s];
       int16_t before = in[IN_ANG + axis], tgt;
-      int max_dev = 0, max_cur = 0, frames = 0;
+      int16_t before6[6], tgt6[6];
+      char why[256] = {0};
+      int k, max_dev = 0, max_cur = 0, frames = 0;
+      for (k = 0; k < 6; k++) before6[k] = in[IN_ANG + k];
       long bs[4] = {0, 0, 0, 0}, rdin = 0, wrin = 0;
       uint32 meas = 0;
       uint16 exc0 = 0, exc1 = 0;
       long t0, t;
 
       sdo16(0x1C32, 12, &exc0);
-      tgt = (int16_t)(before > (ANG_LO + ANG_HI) / 2 ? before - AMP
-                                                     : before + AMP);
-      if (tgt < ANG_LO) tgt = ANG_LO;
-      if (tgt > ANG_HI) tgt = ANG_HI;
-      out[HS_OUT_TARGET + axis] = tgt;
+      if (all)
+      {
+         for (k = 0; k < 6; k++)
+         {
+            int16_t b = before6[k];
+            int16_t t = (int16_t)(b > (ANG_LO + ANG_HI) / 2 ? b - AMP
+                                                            : b + AMP);
+            if (t < ANG_LO) t = ANG_LO;
+            if (t > ANG_HI) t = ANG_HI;
+            tgt6[k] = t;
+         }
+         /* six axes puts the index/thumb collision back in play, so the
+            whole vector goes through the same gate every caller uses */
+         hs_interlock(tgt6, &in[IN_ANG], why, sizeof why);
+         for (k = 0; k < 6; k++) out[HS_OUT_TARGET + k] = tgt6[k];
+         tgt = tgt6[axis];
+      }
+      else
+      {
+         tgt = (int16_t)(before > (ANG_LO + ANG_HI) / 2 ? before - AMP
+                                                        : before + AMP);
+         if (tgt < ANG_LO) tgt = ANG_LO;
+         if (tgt > ANG_HI) tgt = ANG_HI;
+         out[HS_OUT_TARGET + axis] = tgt;
+      }
 
       t0 = now_us();
       while ((t = now_us() - t0) < (long)secs * 1000000L)
@@ -231,10 +260,25 @@ int main(int argc, char **argv)
          bs[(st >> 4) & 3]++;
          if ((st >> 6) & 1) rdin++;
          if ((st >> 7) & 1) wrin++;
-         d = in[IN_ANG + axis] - before;
-         if (d < 0) d = -d;
-         if (d > max_dev) max_dev = d;
-         if (in[IN_CUR + axis] > max_cur) max_cur = in[IN_CUR + axis];
+         if (all)
+         {
+            int worst = 32767;   /* the slowest axis decides */
+            for (k = 0; k < 6; k++)
+            {
+               int dk = in[IN_ANG + k] - before6[k];
+               if (dk < 0) dk = -dk;
+               if (dk < worst) worst = dk;
+               if (in[IN_CUR + k] > max_cur) max_cur = in[IN_CUR + k];
+            }
+            if (worst > max_dev) max_dev = worst;
+         }
+         else
+         {
+            d = in[IN_ANG + axis] - before;
+            if (d < 0) d = -d;
+            if (d > max_dev) max_dev = d;
+            if (in[IN_CUR + axis] > max_cur) max_cur = in[IN_CUR + axis];
+         }
          osal_usleep(p);
       }
       sdo32(0x1C32, 2, &meas);

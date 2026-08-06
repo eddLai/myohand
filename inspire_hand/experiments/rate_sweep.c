@@ -36,7 +36,12 @@
  * here can trip it. Whatever moves the axis moves it with the link up,
  * OPERATIONAL held, and no timeout involved.
  *
- * Usage: rate_sweep <iface> [axis 0-5] [secs_per_step] [p1,p2,...]
+ * Usage: rate_sweep <iface> [axis 0-5, or -1 for all six] [secs_per_step]
+ *                    [p1,p2,...]
+ *   axis -1 drives all six at once through hs_interlock, which is the
+ *   load the daemon will actually put on the slave. Everything measured
+ *   before this was a single axis, and a control loop that finishes in
+ *   time for one axis need not finish in time for six.
  *   the period list is comma separated milliseconds; default 1,2,5,10,
  *   20,30,50,80. Every entry must stay under the 99.9 ms watchdog.
  */
@@ -98,7 +103,7 @@ static int rd16(uint16 idx, uint8 sub, uint16 *v)
 
 int main(int argc, char **argv)
 {
-   int axis = AX_MIDDLE, secs = 4;
+   int axis = AX_MIDDLE, secs = 4, all = 0;
    int i, s, lock_fd, chk;
    int16_t ang_ref, tgt_a, tgt_b;
    int any_moved = 0;
@@ -122,7 +127,9 @@ int main(int argc, char **argv)
       }
       if (!nper) { printf("empty period list\n"); return 1; }
    }
-   if (axis < 0 || axis > 5) { printf("axis must be 0-5\n"); return 1; }
+   if (axis == -1) { all = 1; axis = AX_MIDDLE; }
+   else if (axis < 0 || axis > 5)
+   { printf("axis must be 0-5, or -1 for all six\n"); return 1; }
    if (secs < 1 || secs > 15) { printf("secs 1..15\n"); return 1; }
 
    lock_fd = hs_lock(20);
@@ -191,35 +198,70 @@ int main(int argc, char **argv)
    ang_ref = in[IN_ANG + axis];
    (void)tgt_a; (void)tgt_b;
 
-   printf("axis=%d resting at %d, each step commands %d counts away from "
-          "wherever the axis actually is, %d s per step\n",
-          axis, ang_ref, AMP, secs);
+   if (all)
+      printf("ALL SIX axes, each step commands %d counts away from wherever "
+             "each axis is, through hs_interlock, %d s per step\n",
+             AMP, secs);
+   else
+      printf("axis=%d resting at %d, each step commands %d counts away from "
+             "wherever the axis actually is, %d s per step\n",
+             axis, ang_ref, AMP, secs);
    printf("all periods are under the 99.9 ms watchdog, so nothing below "
           "can be a timeout\n\n");
-   printf("period  target  frames  dANG  maxCUR  0x1C32:02(ns)  cyc-exceeded(+)  state\n");
+   printf("%s\n", all
+          ? "period  target  frames  minDANG maxCUR  0x1C32:02(ns)  cyc-exceeded(+)  state"
+          : "period  target  frames  dANG    maxCUR  0x1C32:02(ns)  cyc-exceeded(+)  state");
 
    out[0] = 1;
    for (s = 0; s < nper; s++)
    {
       int p = periods_ms[s];
       int16_t before, tgt;
-      int max_dev = 0, max_cur = 0, frames = 0;
+      int max_dev = 0, max_cur = 0, frames = 0, d = 0;
+      (void)d;
       uint32 meas = 0;
       uint16 exc0 = 0, exc1 = 0;
       long t0, t;
 
+      int16_t before6[6], tgt6[6];
+      char why[256] = {0};
+      int k;
+
       rd16(0x1C32, 12, &exc0);
       before = in[IN_ANG + axis];
+      for (k = 0; k < 6; k++) before6[k] = in[IN_ANG + k];
       /* Always aim AMP away from where the axis IS, not at a fixed
          endpoint. The first version alternated between two constants, so
          a step could be commanded to the position it already held - and
          "did not move" then means nothing. Every step now has somewhere
          to go. */
-      tgt = (int16_t)(before > (ANG_LO + ANG_HI) / 2 ? before - AMP
-                                                     : before + AMP);
-      if (tgt < ANG_LO) tgt = ANG_LO;
-      if (tgt > ANG_HI) tgt = ANG_HI;
-      out[HS_OUT_TARGET + axis] = tgt;
+      if (all)
+      {
+         /* Six axes means the index/thumb collision is live again, so the
+            whole vector goes through the same gate every other caller
+            uses - the guard answers a clash by moving a DIFFERENT axis
+            clear, so it has to see all six. */
+         for (k = 0; k < 6; k++)
+         {
+            int16_t b = before6[k];
+            int16_t t = (int16_t)(b > (ANG_LO + ANG_HI) / 2 ? b - AMP
+                                                            : b + AMP);
+            if (t < ANG_LO) t = ANG_LO;
+            if (t > ANG_HI) t = ANG_HI;
+            tgt6[k] = t;
+         }
+         hs_interlock(tgt6, &in[IN_ANG], why, sizeof why);
+         for (k = 0; k < 6; k++) out[HS_OUT_TARGET + k] = tgt6[k];
+         tgt = tgt6[axis];
+      }
+      else
+      {
+         tgt = (int16_t)(before > (ANG_LO + ANG_HI) / 2 ? before - AMP
+                                                        : before + AMP);
+         if (tgt < ANG_LO) tgt = ANG_LO;
+         if (tgt > ANG_HI) tgt = ANG_HI;
+         out[HS_OUT_TARGET + axis] = tgt;
+      }
 
       t0 = now_ms();
       while ((t = now_ms() - t0) < (long)secs * 1000)
@@ -227,17 +269,34 @@ int main(int argc, char **argv)
          int d;
          pd();
          frames++;
-         d = in[IN_ANG + axis] - before;
-         if (d < 0) d = -d;
-         if (d > max_dev) max_dev = d;
-         if (in[IN_CUR + axis] > max_cur) max_cur = in[IN_CUR + axis];
+         if (all)
+         {
+            /* the slowest axis is what decides whether the pose arrived,
+               so report the smallest travel rather than the largest */
+            int worst = 32767;
+            for (k = 0; k < 6; k++)
+            {
+               int dk = in[IN_ANG + k] - before6[k];
+               if (dk < 0) dk = -dk;
+               if (dk < worst) worst = dk;
+               if (in[IN_CUR + k] > max_cur) max_cur = in[IN_CUR + k];
+            }
+            if (worst > max_dev) max_dev = worst;
+         }
+         else
+         {
+            d = in[IN_ANG + axis] - before;
+            if (d < 0) d = -d;
+            if (d > max_dev) max_dev = d;
+            if (in[IN_CUR + axis] > max_cur) max_cur = in[IN_CUR + axis];
+         }
          osal_usleep(p * 1000);
       }
       rd32(0x1C32, 2, &meas);
       rd16(0x1C32, 12, &exc1);
       ecx_readstate(&ctx);
 
-      printf("%-7d %-7d %-7d %-5d %-7d %-14u %-16u 0x%02x%s\n",
+      printf("%-7d %-7d %-7d %-7d %-7d %-14u %-16u 0x%02x%s\n",
              p, tgt, frames, max_dev, max_cur, meas, (unsigned)(exc1 - exc0),
              ctx.slavelist[1].state, max_dev > MOVED ? "   <== MOVED" : "");
       if (max_dev > MOVED) any_moved = 1;

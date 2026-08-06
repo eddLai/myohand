@@ -22,6 +22,11 @@ Read them in this order — each one closes something.
 | `coe_startup.txt` | `coe_startup eth1 1000000` | `0x1C32:02` is **read-only** (`SDO abort 0x06010002`), so it is the slave's *measurement* of the SM2 interval, not a setting nobody wrote. It read 18 ms while we drove at 1 ms — and `0x1C32:12`, the cycle-exceeded counter, gained 4843 in eight seconds |
 | **`rate_sweep.txt`** | `rate_sweep eth1 2 4 1,2,3,4,5,6,8` | **The answer.** 1 ms: no motion, no current, cycle-exceeded +2244. **2 ms and every rate below it: ~180 counts of travel, 56-71 mA, cycle-exceeded 0, OPERATIONAL held throughout.** No watchdog anywhere near it |
 
+| `why_1khz_coarse.txt` | `why_1khz eth1 2 4` | **The mechanism.** SM2's status byte sampled every frame: buffers rotate evenly at every rate and state 3 never appears, so the sync manager is healthy and the fault is above it. `rdInUse` — the slave's own controller caught mid-read — is 18% of samples at 1050 us and 0% at 1700 |
+| `why_1khz_boundary.txt` | `why_1khz eth1 2 4 1050,...,1900` | Both edges pinned: nothing moves below ~1.05 ms, and the cycle-exceeded counter reaches exactly zero at 1600 us |
+| `rate_sweep_all.txt` | `rate_sweep eth1 -1 4 1,2,3,4,6` | **All six axes through the interlock.** Same boundary as one: 1 ms dead, 2 ms and slower fine. Current roughly doubles, as six actuators should |
+| `why_1khz_all.txt` | `why_1khz eth1 -1 4 1000,...,2000` | Six axes at microsecond resolution — 1000 us fails, 1600 us is clean, identical to the single-axis run. The limit is a fixed per-cycle cost, not per-axis work |
+
 ## What the set proves together
 
 Read in order, these files record a wrong conclusion being reached and
@@ -38,6 +43,12 @@ application needs more than a millisecond per cycle, and SM-Synchron
 starts a new cycle on every arriving frame, so a 1 kHz feed interrupts it
 forever and outputs are never applied. At 2 ms and slower it works
 perfectly, with the link up and OPERATIONAL held the whole time.
+
+Three regimes, and they do not move when all six axes are driven at once:
+below about 1.05 ms nothing travels at all, between there and 1.5 ms it
+travels while the slave complains on every cycle, and at 1.6 ms and slower
+the complaint counter is exactly zero. `handd` defaults to 500 Hz, which
+sits inside the clean band with a quarter of it as margin.
 
 So the cost of a pose is **2 ms, not 2-3 s**, and the only time constant
 left is the mechanism's own 800 ms full-travel. The "disconnect to

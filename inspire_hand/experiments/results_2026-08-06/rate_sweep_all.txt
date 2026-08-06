@@ -1,0 +1,12 @@
+OP reached in 360 ms.  STA=[2 2 2 2 2 2] ANG=[1802 1786 1251 1781 1375 1527] CUR=[0 0 0 0 0 0]
+ALL SIX axes, each step commands 180 counts away from wherever each axis is, through hs_interlock, 4 s per step
+all periods are under the 99.9 ms watchdog, so nothing below can be a timeout
+
+period  target  frames  minDANG maxCUR  0x1C32:02(ns)  cyc-exceeded(+)  state
+1       1431    3433    0       0       4294958796     2123             0x08
+2       1431    1822    179     135     4294958796     0                0x08   <== MOVED
+3       1250    1259    178     104     4294958796     0                0x08   <== MOVED
+4       1432    962     61      93      4294958796     0                0x08   <== MOVED
+6       1251    651     178     78      4294958796     0                0x08   <== MOVED
+
+verdict: A FEED RATE MOVED IT with the link up and OP held. The firmware was never waiting for a disconnect or a watchdog - we were sending faster than it could consume. 0x1C32:05's 100 us minimum cycle is wrong on this device.

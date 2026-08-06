@@ -17,7 +17,7 @@ to absorb, and `handd` gives it one.
 
 The settle gate belongs to the caller, not here, but the default depends
 on the sink: streaming into the daemon makes waiting-for-stillness
-pointless, while paying two to three seconds per hand_set makes it
+pointless, while paying two to three seconds per hand_set spawn makes it
 essential. settle_frames_default() is where that lives.
 """
 import os
@@ -58,8 +58,12 @@ class Sink:
 
 
 def settle_frames_default(sink_name):
-    """Waiting for five still frames exists because a pose used to cost
-    two to three seconds. Streaming into the daemon removes the reason."""
+    """Waiting for five still frames exists because a pose costs two to
+    three seconds on the hand_set path, which spawns a process and
+    reconnects for every one. The hand itself follows continuously at up
+    to 625 Hz; measured 2026-08-06, see the vault's
+    Execution_Trigger_Settled. Streaming into the daemon therefore removes
+    the reason, and the gate with it."""
     return 0 if sink_name in ("daemon", "none") else 5
 
 

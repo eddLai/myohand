@@ -8,8 +8,16 @@ soem_build/hand_open*
 soem_build/hand_wake
 hand_ctl
 handd
-experiments/ecat_scan
-experiments/ecat_persistent_probe
+
+# 每支實驗的執行檔跟它的 .c 放在同一層，而且沒有副檔名。逐支列名字的話，
+# 下一支編出來的就會再漏掉一次 — 這裡本來只擋得住 ecat_scan 跟
+# ecat_persistent_probe，其餘 11 支全曝在 git status 上。改成用型態判斷：
+# experiments/ 底下不帶「.」的檔案一律當產物。目錄要留下來（results_*/ 是
+# 實驗紀錄），日後若有無副檔名的原始檔（Makefile 之類）在此處開例外。
+experiments/*
+!experiments/*.*
+!experiments/*/
+
 __pycache__/
 *.log
 *.o

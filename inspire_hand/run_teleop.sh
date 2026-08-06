@@ -45,6 +45,7 @@ set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 SOCK="${HAND_SOCKET:-/tmp/inspire_hand.sock}"
 DAEMON_PID=""
+TELEOP_PID=""
 
 daemon_answers() {
     python3 - "$SOCK" <<'EOF' 2>/dev/null
@@ -55,16 +56,30 @@ s.connect(sys.argv[1])
 EOF
 }
 
-cleanup() {
-    [ -n "$DAEMON_PID" ] || return 0
-    echo "run_teleop: stopping the handd it started (pid $DAEMON_PID)" >&2
-    kill -TERM "$DAEMON_PID" 2>/dev/null || true
+# Stop a child and mean it. TERM first, KILL if it will not go: the first
+# version only stopped the daemon and left teleop running, still holding
+# /dev/video0, so the next run blocked on the camera instead of starting.
+# An interrupted OpenCV read does not always come back to Python's signal
+# handler, so "it should have exited" is not enough here.
+stop_child() {
+    local pid=$1 what=$2
+    [ -n "$pid" ] || return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+    echo "run_teleop: stopping $what (pid $pid)" >&2
+    kill -TERM "$pid" 2>/dev/null || true
     for _ in $(seq 1 50); do
-        kill -0 "$DAEMON_PID" 2>/dev/null || return 0
+        kill -0 "$pid" 2>/dev/null || return 0
         sleep 0.1
     done
-    echo "run_teleop: handd did not stop on TERM, killing" >&2
-    kill -KILL "$DAEMON_PID" 2>/dev/null || true
+    echo "run_teleop: $what did not stop on TERM, killing" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+}
+
+cleanup() {
+    # teleop first: it is the one holding the camera, and the daemon is
+    # happier being left last anyway - it parks the hand on the way out.
+    stop_child "$TELEOP_PID" "teleop"
+    stop_child "$DAEMON_PID" "the handd it started"
 }
 # INT/TERM exit, which runs the EXIT trap once - keeping the teardown in a
 # single place rather than three that can disagree.
@@ -107,10 +122,15 @@ fi
 # A bare first argument stays the camera index, the way this script has
 # always been called; anything starting with - goes to teleop_app.py.
 # Not exec: the EXIT trap has to survive to stop the daemon.
+# Backgrounded and waited on rather than run in the foreground, so an
+# interrupt reaches the trap with the child still reapable instead of
+# orphaning it.
 if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
     DEV=$1
     shift
-    "$PY" teleop_app.py --device "$DEV" --socket "$SOCK" "$@"
+    "$PY" teleop_app.py --device "$DEV" --socket "$SOCK" "$@" &
 else
-    "$PY" teleop_app.py --socket "$SOCK" "$@"
+    "$PY" teleop_app.py --socket "$SOCK" "$@" &
 fi
+TELEOP_PID=$!
+wait "$TELEOP_PID"

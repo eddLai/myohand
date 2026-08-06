@@ -27,7 +27,7 @@ existed only because a pose was slow. It is --settle-frames now, and
 defaults to off when streaming, because waiting for the operator to hold
 still is the opposite of following them.
 """
-import argparse, json, os, sys, time
+import argparse, json, os, signal, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,6 +49,7 @@ import teleop_ui as ui
 # the same physical stillness: 120 old units = 58 ANGLEACT.
 SETTLE_TOL = 58
 
+stop = False               # set by SIGINT/SIGTERM; the loop checks it
 sink = None                # where poses go; see hand_sink.open_sink
 settle_frames = 5          # 0 disables the gate entirely
 auto_sync = False
@@ -66,6 +67,22 @@ try:
     SETTINGS.update(json.load(open(SET_PATH)))
 except FileNotFoundError:
     pass
+
+def on_signal(sig, frame):
+    """Ctrl+C and SIGTERM ask the loop to stop rather than tearing the
+    process down where it stands.
+
+    Without this the camera was never released: cap.release() sat after the
+    loop and an interrupt never reached it, so /dev/video0 stayed held by a
+    dead-but-not-gone process and the next run blocked on opening it. That
+    is also why a wrapper cannot fix this from outside - an OpenCV read does
+    not always return control to Python in time for a handler, so the flag
+    has to be checked by the loop itself and the release has to be in a
+    finally."""
+    global stop
+    _ = sig, frame
+    stop = True
+
 
 def send_pose(tgt, stamps=None):
     """Hand the pose to whichever sink is open. The sink decides whether
@@ -202,168 +219,175 @@ def main():
           + (f"  rate={args.rate:g} Hz" if sink.name == "daemon" else ""))
 
     SETTINGS["device"] = args.device if args.device != 4 else SETTINGS["device"]
-    cap = cv2.VideoCapture(SETTINGS["device"])
-    opened_device = SETTINGS["device"]
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-    hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
-                                     min_detection_confidence=0.6,
-                                     min_tracking_confidence=0.5)
-    draw, styles = mp.solutions.drawing_utils, mp.solutions.drawing_styles
-    win = "RH56F1 Hand Teleop"
-    if not args.headless:
-        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(win, args.width + 160, args.height + 90)
-        cv2.moveWindow(win, 40, 60)
-        cv2.setMouseCallback(win, on_mouse)
-    else:
-        # AUTO with no window to click: headless is for exercising the chain
-        # end to end, and a run that never sends is not exercising it.
-        auto_sync = True
+    try:
+        signal.signal(signal.SIGINT, on_signal)
+        signal.signal(signal.SIGTERM, on_signal)
+        cap = cv2.VideoCapture(SETTINGS["device"])
+        opened_device = SETTINGS["device"]
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+        hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
+                                         min_detection_confidence=0.6,
+                                         min_tracking_confidence=0.5)
+        draw, styles = mp.solutions.drawing_utils, mp.solutions.drawing_styles
+        win = "RH56F1 Hand Teleop"
+        if not args.headless:
+            cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(win, args.width + 160, args.height + 90)
+            cv2.moveWindow(win, 40, 60)
+            cv2.setMouseCallback(win, on_mouse)
+        else:
+            # AUTO with no window to click: headless is for exercising the chain
+            # end to end, and a run that never sends is not exercising it.
+            auto_sync = True
 
-    ema = None
-    quiet = 0
-    fps_t, fps = time.time(), 0.0
-    stamps = hand_latency.Stamps()
-    frames = seen = 0
-    t_start = time.time()
+        ema = None
+        quiet = 0
+        fps_t, fps = time.time(), 0.0
+        stamps = hand_latency.Stamps()
+        frames = seen = 0
+        t_start = time.time()
 
-    while True:
-        if SETTINGS["device"] != opened_device:     # follow the settings plate
-            cap.release()
-            cap = cv2.VideoCapture(SETTINGS["device"])
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-            opened_device, ema = SETTINGS["device"], None
-        ok, frame = cap.read()
-        if not ok:
-            time.sleep(0.05)
-            continue
-        stamps.frame()          # the latency ruler starts at the frame
-        frames += 1
-        frame = cv2.flip(frame, 1)
-        res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        tgt = None
+        while not stop:
+            if SETTINGS["device"] != opened_device:     # follow the settings plate
+                cap.release()
+                cap = cv2.VideoCapture(SETTINGS["device"])
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+                opened_device, ema = SETTINGS["device"], None
+            ok, frame = cap.read()
+            if not ok:
+                time.sleep(0.05)
+                continue
+            stamps.frame()          # the latency ruler starts at the frame
+            frames += 1
+            frame = cv2.flip(frame, 1)
+            res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            tgt = None
 
-        if res.multi_hand_landmarks and res.multi_hand_world_landmarks:
-            draw.draw_landmarks(frame, res.multi_hand_landmarks[0],
-                                mp.solutions.hands.HAND_CONNECTIONS,
-                                styles.get_default_hand_landmarks_style(),
-                                styles.get_default_hand_connections_style())
-            raw = hm.pose_from_world_landmarks(res.multi_hand_world_landmarks[0].landmark)
-            if ema is None:
-                ema = raw[:]
+            if res.multi_hand_landmarks and res.multi_hand_world_landmarks:
+                draw.draw_landmarks(frame, res.multi_hand_landmarks[0],
+                                    mp.solutions.hands.HAND_CONNECTIONS,
+                                    styles.get_default_hand_landmarks_style(),
+                                    styles.get_default_hand_connections_style())
+                raw = hm.pose_from_world_landmarks(res.multi_hand_world_landmarks[0].landmark)
+                if ema is None:
+                    ema = raw[:]
+                else:
+                    w = SETTINGS["ema"] / 100.0
+                    ema = [int(w * e + (1 - w) * r) for e, r in zip(ema, raw)]
+                if cal is not None:
+                    grew = False
+                    for k, v in hm.raw_features(res.multi_hand_world_landmarks[0].landmark).items():
+                        lo, hi = cal.get(k, (v, v))
+                        if v < lo - 0.5 or v > hi + 0.5:
+                            grew = True
+                        cal[k] = (min(lo, v), max(hi, v))
+                    if grew:
+                        cal_grew = time.time()
+                moved = max(abs(a - b) for a, b in zip(ema, raw))
+                quiet = quiet + 1 if moved < SETTLE_TOL else 0
+                tgt = ema[:]
+                seen += 1
+                stamps.mapped()     # targets are ready; the rest is the daemon's
             else:
-                w = SETTINGS["ema"] / 100.0
-                ema = [int(w * e + (1 - w) * r) for e, r in zip(ema, raw)]
+                quiet = 0
+
+            if cal is not None and not cal_missing(cal):
+                # never time out and discard: the range stays open until the
+                # operator has actually shown it, then settles on its own
+                if time.time() - cal_grew > CAL_QUIET:
+                    toggle_calibration()
+            busy = sink.busy
+            ui.draw_gauge(frame, tgt, busy, sink.actual)
+            ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
+                           "SYNC ON" if auto_sync else "SYNC OFF")
+            ui.draw_button(frame, ui.CAL_BTN, cal is not None,
+                           "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET,
+                           enabled=not busy)
+            ui.draw_button(frame, ui.PARK_BTN, False, "OPEN HAND", enabled=not busy)
+            ui.draw_button(frame, ui.SET_BTN, show_settings, "SETTINGS", ui.VIOLET)
+            if show_settings:
+                ui.draw_settings(frame, SETTINGS)
+            elapsed = sink.elapsed()
             if cal is not None:
-                grew = False
-                for k, v in hm.raw_features(res.multi_hand_world_landmarks[0].landmark).items():
-                    lo, hi = cal.get(k, (v, v))
-                    if v < lo - 0.5 or v > hi + 0.5:
-                        grew = True
-                    cal[k] = (min(lo, v), max(hi, v))
-                if grew:
-                    cal_grew = time.time()
-            moved = max(abs(a - b) for a, b in zip(ema, raw))
-            quiet = quiet + 1 if moved < SETTLE_TOL else 0
-            tgt = ema[:]
-            seen += 1
-            stamps.mapped()     # targets are ready; the rest is the daemon's
-        else:
-            quiet = 0
-
-        if cal is not None and not cal_missing(cal):
-            # never time out and discard: the range stays open until the
-            # operator has actually shown it, then settles on its own
-            if time.time() - cal_grew > CAL_QUIET:
-                toggle_calibration()
-        busy = sink.busy
-        ui.draw_gauge(frame, tgt, busy, sink.actual)
-        ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
-                       "SYNC ON" if auto_sync else "SYNC OFF")
-        ui.draw_button(frame, ui.CAL_BTN, cal is not None,
-                       "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET,
-                       enabled=not busy)
-        ui.draw_button(frame, ui.PARK_BTN, False, "OPEN HAND", enabled=not busy)
-        ui.draw_button(frame, ui.SET_BTN, show_settings, "SETTINGS", ui.VIOLET)
-        if show_settings:
-            ui.draw_settings(frame, SETTINGS)
-        elapsed = sink.elapsed()
-        if cal is not None:
-            missing = cal_missing(cal)
-            headline = "Calibrating"
-            if not missing:
-                hint = (f"saving in {max(0.0, CAL_QUIET - (time.time() - cal_grew)):.0f} s - "
-                        "keep going if you have more range to show")
+                missing = cal_missing(cal)
+                headline = "Calibrating"
+                if not missing:
+                    hint = (f"saving in {max(0.0, CAL_QUIET - (time.time() - cal_grew)):.0f} s - "
+                            "keep going if you have more range to show")
+                else:
+                    span = {k: v[1] - v[0] for k, v in cal.items()}
+                    need = ["fingers: open wide, then a full fist "
+                            f"({span.get('curl_hi', 0):.0f} of {CAL_NEED['curl_hi']} deg)"
+                            if "curl_hi" in missing else "",
+                            "thumb: tuck it in, then splay it out "
+                            f"({span.get('abd', 0):.0f} of {CAL_NEED['abd']} deg)"
+                            if "abd" in missing else ""]
+                    hint = "   ".join(n for n in need if n)
+                tone = ui.VIOLET
+            elif busy:
+                headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET
+            elif tgt is None:
+                headline, hint, tone = "Show your hand", "hold it in view of the camera", ui.CREAM
+            elif quiet >= settle_frames:
+                headline, hint, tone = (
+                    ("Following" if settle_frames == 0 else "Sending",
+                     f"streaming to {sink.name}" if settle_frames == 0
+                     else "auto sync is on", ui.AMBER) if auto_sync
+                    else ("Ready", "press space to send this pose", ui.AMBER))
             else:
-                span = {k: v[1] - v[0] for k, v in cal.items()}
-                need = ["fingers: open wide, then a full fist "
-                        f"({span.get('curl_hi', 0):.0f} of {CAL_NEED['curl_hi']} deg)"
-                        if "curl_hi" in missing else "",
-                        "thumb: tuck it in, then splay it out "
-                        f"({span.get('abd', 0):.0f} of {CAL_NEED['abd']} deg)"
-                        if "abd" in missing else ""]
-                hint = "   ".join(n for n in need if n)
-            tone = ui.VIOLET
-        elif busy:
-            headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET
-        elif tgt is None:
-            headline, hint, tone = "Show your hand", "hold it in view of the camera", ui.CREAM
-        elif quiet >= settle_frames:
-            headline, hint, tone = (
-                ("Following" if settle_frames == 0 else "Sending",
-                 f"streaming to {sink.name}" if settle_frames == 0
-                 else "auto sync is on", ui.AMBER) if auto_sync
-                else ("Ready", "press space to send this pose", ui.AMBER))
-        else:
-            headline, hint, tone = "Hold still", "the pose sends once it settles", ui.CREAM
-        now = time.time()
-        fps = 0.9 * fps + 0.1 * (1.0 / max(now - fps_t, 1e-3))
-        fps_t = now
-        progress = 1.0 if settle_frames == 0 else min(1.0, quiet / settle_frames)
-        ui.draw_rail(frame, headline, hint, tone, progress,
-                     elapsed, cal_note or sink.last_result, fps,
-                     "space  send      q  quit")
+                headline, hint, tone = "Hold still", "the pose sends once it settles", ui.CREAM
+            now = time.time()
+            fps = 0.9 * fps + 0.1 * (1.0 / max(now - fps_t, 1e-3))
+            fps_t = now
+            progress = 1.0 if settle_frames == 0 else min(1.0, quiet / settle_frames)
+            ui.draw_rail(frame, headline, hint, tone, progress,
+                         elapsed, cal_note or sink.last_result, fps,
+                         "space  send      q  quit")
 
-        # With the gate off this fires every frame and the sink decides what
-        # is worth sending; with the gate on it waits for stillness, which is
-        # what a two-to-three-second pose demands.
-        if (tgt and auto_sync and quiet >= settle_frames and not sink.busy
-                and (last_sent is None
-                     or max(abs(a - b) for a, b in zip(tgt, last_sent))
-                     > sink.deadband)):
-            last_sent = tgt[:]
-            send_pose(tgt, stamps)
+            # With the gate off this fires every frame and the sink decides what
+            # is worth sending; with the gate on it waits for stillness, which is
+            # what a two-to-three-second pose demands.
+            if (tgt and auto_sync and quiet >= settle_frames and not sink.busy
+                    and (last_sent is None
+                         or max(abs(a - b) for a, b in zip(tgt, last_sent))
+                         > sink.deadband)):
+                last_sent = tgt[:]
+                send_pose(tgt, stamps)
 
-        if args.max_frames and frames >= args.max_frames:
-            break
-        if args.headless:
-            continue
-        cv2.imshow(win, frame)
-        k = cv2.waitKey(1) & 0xFF
-        if k in (ord("q"), 27):
-            break
-        elif k == ord(" ") and tgt:
-            last_sent = tgt[:]
-            send_pose(tgt, stamps)
-        elif k == ord("a"):
-            auto_sync = not auto_sync
-        elif k == ord("c"):
-            toggle_calibration()
-        elif k == ord("o"):
-            send_pose(PARK)
-        elif k == ord("s"):
-            show_settings = not show_settings
+            if args.max_frames and frames >= args.max_frames:
+                break
+            if args.headless:
+                continue
+            cv2.imshow(win, frame)
+            k = cv2.waitKey(1) & 0xFF
+            if k in (ord("q"), 27):
+                break
+            elif k == ord(" ") and tgt:
+                last_sent = tgt[:]
+                send_pose(tgt, stamps)
+            elif k == ord("a"):
+                auto_sync = not auto_sync
+            elif k == ord("c"):
+                toggle_calibration()
+            elif k == ord("o"):
+                send_pose(PARK)
+            elif k == ord("s"):
+                show_settings = not show_settings
 
-    cap.release()
+    finally:
+        # The camera and the sink are released here rather than after the
+        # loop, so an exception leaves /dev/video0 free for the next run
+        # instead of held by a process that is already gone.
+        cap.release()
+        sink.close()
     if not args.headless:
         cv2.destroyAllWindows()
     dt = max(time.time() - t_start, 1e-6)
     print(f"{frames} frames in {dt:.1f}s = {frames / dt:.1f} FPS; "
           f"a hand was in {seen} of them ({100.0 * seen / max(frames, 1):.0f}%); "
           f"{sink.sent} pose(s) reached the {sink.name} sink")
-    sink.close()
     return 0
 
 

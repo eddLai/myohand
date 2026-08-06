@@ -148,6 +148,15 @@ says so ("Ready - press space to send this pose"). **OPEN HAND** sends
 regardless of SYNC, which makes it the fastest way to prove the chain is
 alive.
 
+Ctrl+C stops everything, including the camera. `teleop_app.py` handles
+SIGINT and SIGTERM by asking its loop to stop, and releases the camera and
+the sink in a `finally` - before that the release sat after the loop, an
+interrupt never reached it, and `/dev/video0` stayed held by a process that
+was already gone, so the next run blocked on opening it. A wrapper cannot
+fix that from outside: an OpenCV read does not reliably hand control back
+to Python in time for a handler, so the flag has to be checked by the loop
+itself.
+
 `run_teleop.sh` only stops a daemon it started itself. If one is already
 answering it says so and leaves it alone, because killing something
 another window is driving would be the worse surprise. `handd` shuts down

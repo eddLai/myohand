@@ -106,8 +106,10 @@ def test_teleop_releases_camera():
         return
 
     proc = subprocess.Popen(
-        [py, os.path.join(HERE, "teleop_app.py"), "--sink=none",
-         "--headless", "--device=0"],
+        # teleop_app.py lives in teleop/, not here, since the restructure
+        [py, os.path.normpath(os.path.join(HERE, "..", "teleop",
+                                           "teleop_app.py")),
+         "--sink=none", "--headless", "--device=0"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True)
     try:

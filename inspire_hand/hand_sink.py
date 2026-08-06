@@ -1,15 +1,17 @@
 """Where teleop's targets go, and how often.
 
 Three destinations behind one interface, because the right one depends on
-a question that is still open (does the firmware need the disconnect?) and
-on whether there is a hand plugged in at all:
+whether the daemon is running and whether there is a hand plugged in at
+all. It used to depend on an open question - does the firmware need the
+disconnect? - which 2026-08-06 answered: no, it needs a feed slow enough
+to absorb, and `handd` gives it one.
 
   daemon    stream into handd at a fixed rate. This is continuous
             following: the pose is pushed as it changes rather than
             waiting for the operator to hold still.
   hand_set  one subprocess per pose, the path that predates the daemon.
-            Kept because it is the only one ever measured to drive this
-            hand, and because it is the fallback if handd is not running.
+            Kept as the fallback when handd is not running; it cycles at
+            1 kHz, so what applies its pose is the process exiting.
   dry-run   nothing leaves the process. The vision chain, the mapping and
             the whole UI can be worked on with no hand and no daemon.
 
@@ -33,8 +35,10 @@ class Sink:
     """What teleop needs from a destination."""
 
     name = "none"
-    #: how far a target must move before it is worth resending
-    deadband = 25
+    #: how far a target must move before it is worth resending. A distance
+    #: on the target scale, so it moved with the 2026-08-06 correction:
+    #: 25 units of the old 0..2000 scale are 12 ANGLEACT counts.
+    deadband = 12
 
     def __init__(self):
         self.busy = False
@@ -77,12 +81,13 @@ class DryRunSink(Sink):
 
 
 class HandSetSink(Sink):
-    """One `hand_set` process per pose. Slow by construction: the pose
-    executes when the master disconnects, which is what the process exit
-    is for."""
+    """One `hand_set` process per pose. Slow by construction: it feeds the
+    slave at 1 kHz, which this hand applies nothing at, so the pose lands
+    when the process exits and the frames stop."""
 
     name = "hand_set"
-    deadband = 250            # a resend costs seconds, so only for real moves
+    deadband = 120            # a resend costs seconds, so only for real moves
+                              # (250 on the pre-2026-08-06 target scale)
 
     def __init__(self, binary=None, force=500, speed=1000, timeout=40):
         super().__init__()
@@ -142,13 +147,14 @@ class DaemonSink(Sink):
     become a gap in the command stream and a fast one does not flood it.
 
     Only a pose that has actually moved is sent. Repeating an unchanged
-    one would, with the disconnect trigger, schedule an execution cycle
-    for a pose the hand is already holding.
+    one is free under the continuous trigger, but with watchdog or
+    disconnect it schedules an execution cycle for a pose the hand is
+    already holding, so the deadband stays.
     """
 
     name = "daemon"
 
-    def __init__(self, socket_path=None, rate_hz=50, deadband=25,
+    def __init__(self, socket_path=None, rate_hz=50, deadband=12,
                  telemetry_hz=5):
         super().__init__()
         import hand_client                      # deferred: only this sink needs it
@@ -236,7 +242,7 @@ def open_sink(kind, socket_path=None, rate_hz=50, deadband=None,
         s = HandSetSink(force=force, speed=speed)
     elif kind == "daemon":
         s = DaemonSink(socket_path=socket_path, rate_hz=rate_hz,
-                       deadband=deadband if deadband is not None else 25)
+                       deadband=deadband if deadband is not None else 12)
     else:
         raise ValueError(f"unknown sink '{kind}' - use daemon, hand_set or none")
     if deadband is not None:

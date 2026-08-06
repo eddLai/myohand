@@ -1,23 +1,27 @@
 /* sii_dump - what does the slave actually say its PDOs and mailbox are?
  *
- * Two assumptions have been carried by every binary in this tree without
- * ever being re-checked, and both of them matter for the question of why
- * this hand only executes a pose when the SM watchdog expires:
+ * Written to test two assumptions that every binary in this tree had
+ * carried without ever re-checking them. Both are now answered, and the
+ * answers are in results_2026-08-06/sii_dump.txt next door:
  *
- *   1. The RxPDO is [ENABLE_SET][ANGLE_SET x6][FORCE_SET x6][SPEED_SET x6].
- *      The ANGLE_SET half is confirmed - a commanded 1500 lands on
- *      ANGLEACT 1498 - but nothing has ever confirmed that ENABLE_SET is
- *      word 0, or that it is 16 bits wide. op_execute_hunt swept 13
- *      values through word 0 and got nothing, which means either the
- *      field does not do what we think or we were writing to the wrong
- *      place. The SII PDO category names the entries; ask it.
+ *   1. The RxPDO was assumed to be [ENABLE_SET][ANGLE_SET x6][FORCE_SET x6]
+ *      [SPEED_SET x6]. The EEPROM names only SIX of the nineteen words it
+ *      reserves - ENABLE_SET at 0x7000:01 and ANGLESET1..5 at :02..:06 -
+ *      and leaves the other thirteen as zeros. So ENABLE_SET really is
+ *      word 0 and 16 bits wide (which is what op_execute_hunt needed to
+ *      know), the sixth angle is missing from the description of a
+ *      six-axis hand, and the force/speed half of our layout has no
+ *      backing in the device's own description at all. It is inferred,
+ *      and this file is where that becomes visible.
  *
- *   2. "dead CoE mailbox on this SSC build" - a line every tool here
- *      repeats as `mbx_proto = 0`. If CoE is in fact alive, then
- *      0x1C32:01 (SM2 synchronization type) is readable, and that object
- *      is precisely what decides WHEN a slave applies its outputs. It
- *      would be embarrassing to blame the vendor's firmware for a
- *      behaviour that one SDO write configures.
+ *   2. "dead CoE mailbox on this SSC build" - a line sixteen files
+ *      repeated as `mbx_proto = 0`. It is wrong: CoE answers every SDO,
+ *      and the device calls itself LAN9252_16HBI. The belief came from
+ *      asking in INIT, where mailboxes are not serviced yet; this tool
+ *      made the same mistake on its first run and reported state=0x01
+ *      while doing so. The zeroing has to stay regardless, because the
+ *      compliant 18-byte CoE map is refused with AL=0x001e - see
+ *      compliant_op.
  *
  * Read-only: SII reads and, if the mailbox answers, SDO reads. No PDO
  * map, no OPERATIONAL, no output data. It cannot move the hand.

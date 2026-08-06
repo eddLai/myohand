@@ -1133,6 +1133,38 @@ static void handle_line(client_t *c, char *line)
                 "\"queued\":%s}",
              ++seq, guarded, why, bus_up ? "false" : "true");
    }
+   else if (!strcmp(cmd, "profile"))
+   {
+      /* hand_api.InspireHand.pose() has always taken force and speed per
+         call. The daemon only had them as start-up flags, so routing that
+         API through here would have silently dropped two arguments - an
+         API that still type-checks but no longer means what it says. This
+         command exists so it keeps meaning it. */
+      char *tf = strtok(NULL, " \t"), *ts = strtok(NULL, " \t");
+      long f, sp;
+      if (!tf || !ts)
+      {
+         creply(c, "{\"ok\":false,\"error\":\"profile needs force and "
+                   "speed\"}");
+         return;
+      }
+      f = strtol(tf, NULL, 10);
+      sp = strtol(ts, NULL, 10);
+      if (f < 0 || f > 1000 || sp < 50 || sp > 1000)
+      {
+         creply(c, "{\"ok\":false,\"error\":\"force 0..1000, speed "
+                   "50..1000\"}");
+         return;
+      }
+      cfg.force = (int)f;
+      cfg.speed = (int)sp;
+      /* write it into the live output image now rather than waiting for
+         the next target, so a client that sets a profile and then reads
+         state sees a hand that already agrees with it */
+      if (bus_up && out) hs_profile(out, cfg.force, cfg.speed);
+      creply(c, "{\"ok\":true,\"force\":%d,\"speed\":%d}",
+             cfg.force, cfg.speed);
+   }
    else if (!strcmp(cmd, "stats"))
    {
       /* the same breakdown for either trigger - that is the point of it */
@@ -1163,7 +1195,7 @@ static void handle_line(client_t *c, char *line)
    }
    else
       creply(c, "{\"ok\":false,\"error\":\"unknown command '%s' - try hello, "
-                "scale, dc, state, stats, target, bye\"}", cmd);
+                "scale, dc, state, stats, target, profile, bye\"}", cmd);
 }
 
 static int socket_open(const char *path)

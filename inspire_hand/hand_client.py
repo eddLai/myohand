@@ -121,6 +121,17 @@ class HandClient:
             line += stamps.as_tokens()
         return self.command(line)
 
+    def profile(self, force, speed):
+        """Set the force and speed the daemon writes with, for this and
+        every later target, until changed again.
+
+        It exists because hand_api.InspireHand.pose() has always taken
+        these per call. Without it, routing that API through the daemon
+        would quietly drop two arguments - the signature would still be
+        satisfied and the hand would still move, just not with the grip
+        that was asked for."""
+        return self.command(f"profile {int(force)} {int(speed)}")
+
     def stats(self):
         """The latency breakdown so far, same columns for either trigger."""
         return self.command("stats")

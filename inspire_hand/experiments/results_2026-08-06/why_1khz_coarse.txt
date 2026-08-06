@@ -1,0 +1,24 @@
+SM2 control 0x64  status 0x02 at rest
+0x1C32:05 min cycle    = 100000 ns  (what it advertises)
+0x1C32:06 calc+copy    = 0 ns  (what it says a cycle costs it)
+STA=[1 0 1 1 2 2] ANG=[1802 1786 1787 1781 1375 1527]
+
+SM2 status byte, sampled every frame. bufState 3 means "nothing written since the last read";
+0-2 name which of the three buffers was written last. rdInUse is the PDI - the hand's
+own controller - holding a buffer open to read it.
+
+period_us  frames  dANG  maxCUR  meas_us  cycExc(+)  bufState 0/1/2/3        rdInUse  wrInUse
+1000       3249    0     0       1988     2104        1083/ 1083/ 1083/    0  630      0       
+1100       3078    0     54      1988     2177        1026/ 1026/ 1026/    0  556      0       
+1200       2677    189   54      1988     1624         892/  893/  892/    0  255      0         MOVED
+1300       2601    181   50      1988     1936         867/  867/  867/    0  106      0         MOVED
+1500       2332    178   40      1988     935          777/  777/  778/    0  0        0         MOVED
+1800       1858    180   49      1988     0            620/  619/  619/    0  1        0         MOVED
+2000       1638    178   75      1988     0            546/  546/  546/    0  0        0         MOVED
+3000       1209    180   51      1988     0            403/  403/  403/    0  0        0         MOVED
+
+How to read it: if the rows that fail differ from the rows that
+work in the bufState/rdInUse columns, the sync manager is where
+it breaks and the application never completing a read is the
+mechanism. If those columns look the same either way, the fault
+is above the SM and meas_us versus period_us is the next clue.

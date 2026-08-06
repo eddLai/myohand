@@ -1,16 +1,30 @@
 """inspire_hand.hand_api - Python API for the Inspire RH56F1 dexterous hand.
 
-Wraps the SOEM-based `hand_ctl` binary (EtherCAT).
 Axis order everywhere: [pinky, ring, middle, index, thumb_bend, thumb_rot]
 Targets are ANGLEACT counts: ~890 = fully closed, ~1850 = fully open,
 -1 = leave unchanged. The scale lives in hand_scale.py / hand_safety.h.
 
+Two paths, one surface. If `handd` is running this talks to it over its
+unix socket and a pose costs a couple of milliseconds; if it is not, this
+spawns `hand_ctl` exactly as it always did and a pose costs seconds. The
+method names, their arguments and the dict they return are identical
+either way, so nothing that imports this module has to know or care -
+that is the whole point, and it is why `pose()` keeps taking `force` and
+`speed` per call even though the daemon used to have them only as
+start-up flags (a `profile` command was added to handd so the argument
+still means something rather than being quietly dropped).
+
+Read `.via` if you do want to know: "daemon" or "hand_ctl".
+
 F1 quirks handled here:
-  - the firmware applies a pose only when the sync-manager watchdog
-    expires (99.9 ms). Dropping the link is how this path causes that, so
-    each call is one connect/wake/write/disconnect cycle
-  - index+thumb deep-close collision -> guarded in hand_ctl; fist() staggers
-    fingers and thumb into two phases automatically
+  - the hand applies a pose continuously while process data arrives, but
+    only if it arrives no faster than about 625 Hz - above that its
+    control loop never finishes and nothing moves at all. handd defaults
+    to 500 Hz. The old belief that a pose executed only on disconnect was
+    this same effect seen from the wrong side; see the vault's
+    Execution_Trigger_Settled
+  - index+thumb deep-close collision -> guarded below the API in either
+    path; fist() staggers fingers and thumb into two phases automatically
 """
 import json
 import subprocess
@@ -20,11 +34,18 @@ from pathlib import Path
 import hand_scale
 
 HAND_CTL = str(Path(__file__).resolve().parent / "hand_ctl")
-# Wait after the disconnect for the pose to physically execute. The
-# protocol needs ~100 ms of watchdog plus the axis's own travel time; the
-# rest of this is the conservative margin that predates knowing that, and
-# it is why a gesture call feels slow. Measured floor: see the README.
+# The hand_ctl path writes a pose and drops the link, so the caller has to
+# wait out the watchdog plus the axis's own travel. Mostly this number is
+# conservative margin from before either was measured, and it is why a
+# gesture call on that path feels slow.
 SETTLE_S = 6
+# On the daemon path there is no disconnect to wait for, so instead of
+# sleeping a fixed time we watch the hand until it stops moving. The cap
+# is a little over the 800 ms a finger needs for full travel.
+SETTLE_POLL_S = 0.05
+SETTLE_STILL_READS = 3
+SETTLE_MAX_S = 1.5
+SETTLE_EPS = 8          # ANGLEACT counts; below this the axis has arrived
 
 OPEN = hand_scale.TARGET_MAX
 CLOSED = hand_scale.TARGET_MIN
@@ -52,20 +73,115 @@ def _run(args, timeout=40):
 
 
 class InspireHand:
-    """One method call = one executed pose (or a telemetry read)."""
+    """One method call = one executed pose (or a telemetry read).
+
+    Uses `handd` when it is up and `hand_ctl` when it is not. Pass
+    use_daemon=False to force the subprocess path (useful when something
+    else owns the daemon, or to reproduce an old measurement)."""
+
+    def __init__(self, use_daemon=True, socket_path=None):
+        self._client = None
+        self._profile = None
+        if use_daemon:
+            self._client = self._try_daemon(socket_path)
+
+    @staticmethod
+    def _try_daemon(socket_path):
+        """Connect if handd is there. Any failure means it is not, and the
+        subprocess path is a complete fallback, so this never raises."""
+        try:
+            import hand_client
+        except ImportError:
+            return None
+        try:
+            kw = {"path": socket_path} if socket_path else {}
+            return hand_client.HandClient(**kw).connect()
+        except Exception:
+            return None
+
+    @property
+    def via(self):
+        """Which path this instance is using: "daemon" or "hand_ctl"."""
+        return "daemon" if self._client else "hand_ctl"
+
+    def close(self):
+        if self._client:
+            self._client.close()
+            self._client = None
 
     def state(self):
         """Read telemetry without moving anything."""
-        return _run(["state"])
+        if not self._client:
+            return _run(["state"])
+        return self._normalise(self._client.state(), mode="state")
 
     def pose(self, targets, force=500, speed=800, settle=True):
         """Execute a 6-axis pose. targets: 6 ints (890..1850, or -1)."""
         if len(targets) != 6:
             raise HandError("need exactly 6 targets")
-        out = _run(["pose"] + [str(int(t)) for t in targets] +
-                   [str(int(force)), str(int(speed))])
+        if not self._client:
+            out = _run(["pose"] + [str(int(t)) for t in targets] +
+                       [str(int(force)), str(int(speed))])
+            if settle:
+                time.sleep(SETTLE_S)
+            return out
+
+        try:
+            if self._profile != (force, speed):
+                self._client.profile(force, speed)
+                self._profile = (force, speed)
+            ack = self._client.target([int(t) for t in targets])
+        except Exception as e:
+            # A daemon that died mid-session must not take the caller with
+            # it: fall back for this call and for the rest of the session.
+            self._client = None
+            self._profile = None
+            return self.pose(targets, force, speed, settle)
         if settle:
-            time.sleep(SETTLE_S)
+            self._wait_still()
+        # state() has already normalised, and _normalise uses setdefault so
+        # it will not overwrite the "state" it put there - say what this
+        # call actually was, explicitly.
+        out = self.state()
+        out["mode"] = "pose"
+        out["guarded"] = ack.get("guarded", 0)
+        out["guard_note"] = ack.get("guard_note", "")
+        return out
+
+    def _wait_still(self):
+        """Poll until the axes stop moving, instead of sleeping a constant.
+
+        The hand_ctl path sleeps SETTLE_S because it has nothing to watch -
+        the link is down. Here telemetry is live, so "settled" can mean
+        what it says."""
+        deadline = time.time() + SETTLE_MAX_S
+        still = 0
+        prev = None
+        while time.time() < deadline and still < SETTLE_STILL_READS:
+            ang = self.state().get("ang")
+            if prev is not None and ang is not None and \
+                    all(abs(a - b) <= SETTLE_EPS for a, b in zip(ang, prev)):
+                still += 1
+            else:
+                still = 0
+            prev = ang
+            time.sleep(SETTLE_POLL_S)
+
+    @staticmethod
+    def _normalise(reply, mode):
+        """Give the daemon's reply the shape hand_ctl's callers expect.
+
+        The two speak the same telemetry keys already; what the daemon
+        does not send is the mode/guarded/guard_note trio, and what it
+        does send that hand_ctl never did (bus, simulate) is additive and
+        harmless. Filling the gap here means a caller written against
+        hand_ctl keeps working unchanged."""
+        if reply.get("bus") == "down":
+            raise HandError(reply.get("note", "daemon reports the bus down"))
+        out = dict(reply)
+        out.setdefault("mode", mode)
+        out.setdefault("guarded", 0)
+        out.setdefault("guard_note", "")
         return out
 
     # ---- gesture library ----------------------------------------------

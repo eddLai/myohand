@@ -79,8 +79,12 @@ def main():
             time.sleep(0.02)
 
         sink = hand_sink.open_sink("daemon", socket_path=sock, rate_hz=50)
+        # whatever the daemon was started with, the sink has to repeat it
+        # back rather than assume one - which is why this asserts against
+        # the daemon's own answer and not against a literal
         check("the daemon sink connects and reports the trigger",
-              sink.info.get("trigger") == "disconnect", str(sink.info))
+              sink.info.get("trigger") in sink.info.get("triggers", []),
+              str(sink.info))
         check("it says out loud that it is simulated",
               sink.simulated and "SIMULATED" in sink.last_result)
 

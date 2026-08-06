@@ -23,13 +23,23 @@
  *   axis: 0=pinky 1=ring 2=middle(default) 3=index 4=thumb_bend 5=thumb_rot
  *   dc_cycle_us: 0 (default) leaves distributed clocks off, exactly as the
  *     2026-08-05 run had them. Non-zero calls ecx_configdc() and arms Sync0
- *     at that period. An SSC application commonly copies PDO outputs only
- *     inside the Sync0 interrupt; if this one does, never starting DC means
- *     the data sits in the output buffer unread and the "disconnect-gated"
- *     result is our omission rather than the firmware's design.
+ *     at that period, on the theory that an SSC application copies PDO
+ *     outputs only inside the Sync0 interrupt.
+ *
+ * WHAT THIS PROBE CONCLUDED IS WRONG, and it is kept because being able
+ * to reproduce a wrong answer is worth something. It reports
+ * DISCONNECT-GATED with Sync0 running, and that reading survived exactly
+ * as long as nobody varied the feed rate: this probe cycles at 1 kHz
+ * throughout, which is the one rate this hand cannot apply anything at
+ * (its application cycle is 18-27 ms, and every arriving frame restarts
+ * it). rate_sweep.c is the tool that found that; run it before drawing
+ * any conclusion from this one. The axis moving "after the disconnect"
+ * is the axis moving once the interruptions stop.
+ *
  * Plan, result and rerun instructions live in the ExoPulse_docs vault:
  * Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/
- * Persistent_OP_Probe.md. Raw trace of the 2026-08-05 run is next to this
+ * Persistent_OP_Probe.md, superseded by Execution_Trigger_Settled.md in
+ * the same directory. Raw trace of the 2026-08-05 run is next to this
  * file as probe_2026-08-05_eno1_axis2.csv.
  */
 #include "soem/soem.h"

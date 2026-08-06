@@ -181,6 +181,46 @@ says so ("Ready - press space to send this pose"). **OPEN HAND** sends
 regardless of SYNC, which makes it the fastest way to prove the chain is
 alive.
 
+### On `ntk112` (120.126.83.112), out of a conda env
+
+The teleop dependencies live in a conda env on this host rather than in a
+`venv`, and three of the launcher's defaults are wrong here. Each fails
+in its own way, so all three are worth setting deliberately:
+
+    conda activate myohand-teleop
+    cd <checkout>/teleop
+    TELEOP_PYTHON=$HOME/miniconda3/envs/myohand-teleop/bin/python \
+      DISPLAY=:1 ./run_teleop.sh --iface=enp17s0 --device 0
+
+**`TELEOP_PYTHON` is not optional in a worktree of its own.**
+`pick_python` tries `../venv` and then `$HOME/myohand/venv` — and that
+second path exists on this host, belongs to a different checkout, and
+imports `cv2` and `mediapipe` successfully. So the guard passes and
+teleop runs on another developer's interpreter without a word. Having
+activated the conda env does not help: the script never consults `$PATH`.
+
+**`DISPLAY=:1`.** The graphical session here is `:1`; the script defaults
+to `:0`, which does not exist (`xdpyinfo` answers "unable to open
+display"). `XAUTHORITY` needs no help — `~/.Xauthority` is where the
+script already looks.
+
+**`--iface=enp17s0`.** Without it, and without `$ECAT_IFACE` exported,
+`handd` falls back to `eth0`, which this host does not have. The hand is
+also the only carrier among the six NICs, so
+`cat /sys/class/net/enp17s0/carrier` returning 0 means the cable or the
+hand's power is out — `handd` will start, report "no EtherCAT slave
+answered", and exit. Check that before suspecting the software.
+
+A fresh worktree needs its own capabilities, because caps live on the
+binary and every worktree builds its own:
+
+    make -C hand_fw all && make -C hand_fw cap    # sudo once
+
+`handd` is the one that is easy to miss. It asks for `cap_sys_nice` and
+`cap_ipc_lock` on top of the two the others take, and without
+`cap_net_raw` it cannot open the NIC at all. The camera is `--device 0`
+(`/dev/video1` is the same sensor's metadata node).
+
 ## Interrupting anything
 
 Ctrl+C releases what was held, on every entry point, and
@@ -208,6 +248,31 @@ teleop was the one that actually broke: it handled no signals, and
 never takes. A wrapper cannot fix that from outside — an OpenCV read does
 not reliably hand control back to Python in time for a handler, so the
 flag has to be checked by the loop itself.
+
+### Foreground, background, and what Ctrl+C reaches
+
+Ctrl+C sends SIGINT to the terminal's foreground process group and to
+nothing else, so how `handd` was started decides how it can be stopped:
+
+| Started as | prompt returns | Ctrl+C reaches it | dies with the terminal |
+|---|---|---|---|
+| `./handd --iface=enp17s0` | no | yes | yes |
+| `./handd --iface=enp17s0 &` | yes | **no** | yes, via SIGHUP |
+| `setsid ... ./handd ... &` | yes | **no** | **no** |
+
+All three end the same way once a signal does arrive — the three signals
+share one handler. What differs is only which signals can get there.
+Backgrounded with `&` the daemon is out of the foreground group, so
+Ctrl+C never touches it and it is `pkill -TERM handd` or closing the
+terminal. Under `setsid` there is no controlling terminal at all, so
+`pkill -TERM handd` is the only way; that is the right form when the
+daemon has to outlive the ssh session that started it, and the wrong one
+for interactive work.
+
+For interactive runs prefer the foreground, in its own terminal: the log
+is in front of you and Ctrl+C is enough. `Ctrl+Z` is not an exit —
+SIGTSTP stops the process, which stops the EtherCAT cycle while the
+daemon still holds the bus lock. Follow it with `bg`, or do not use it.
 
 `../teleop/run_teleop.sh` only stops a daemon it started itself. If one is already
 answering it says so and leaves it alone, because killing something

@@ -25,6 +25,18 @@ EMG 那半邊還沒有任何程式碼會去呼叫 `hand_fw/`，webcam teleop 也
 Python 進入點走 root venv，例如 `venv/bin/python3 hand_fw/hand_api.py open`；
 `camera/` 底下的獨立腳本要從那個資料夾執行：`cd camera && ../venv/bin/python3 calibrate.py`。
 
+環境在 conda 而不是 root venv 的機器（例如 `ntk112`），要用 `TELEOP_PYTHON`
+明講用哪個直譯器：
+
+    TELEOP_PYTHON=$HOME/miniconda3/envs/myohand-teleop/bin/python \
+      DISPLAY=:1 ./teleop/run_teleop.sh --iface=enp17s0 --device 0
+
+只 `conda activate` 是不夠的——`run_teleop.sh` 不看 `$PATH`，會依序退到
+`../venv` 和 `$HOME/myohand/venv`，而後者可能是別人 checkout 的環境且
+import 得過，於是靜靜地跑錯直譯器。該主機的其他細節（`DISPLAY=:1`、
+網卡、caps）見 [`hand_fw/README.md`](hand_fw/README.md) 的
+「Running the whole thing」。
+
 ## emg/
 
 | 檔案 | 用途 |

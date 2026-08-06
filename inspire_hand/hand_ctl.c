@@ -13,10 +13,13 @@
  * Behavior encodes the reverse-engineered F1 semantics:
  *   - boot lands all axes in STATUS=7 (standby); wiggle around current
  *     position wakes them before a pose is accepted
- *   - the firmware applies a pose when the sync-manager watchdog expires
- *     (99.9 ms, measured), not while OPERATIONAL. Dropping the link is
- *     one way to cause that and the way this tool uses, so it writes the
- *     pose, holds briefly, then exits
+ *   - the hand applies a pose continuously while process data arrives,
+ *     provided it arrives no faster than about 625 Hz. This tool cycles
+ *     at 500 Hz for that reason, so the pose executes during the hold and
+ *     the telemetry printed below is the pose that actually happened
+ *     rather than the one about to. It used to cycle at 1 kHz, at which
+ *     this hand applies nothing, which is why it looked as though a pose
+ *     needed the master to disconnect
  * Safety (shared driver layer, see hand_safety.c):
  *   - exclusive bus lock, range clamp, per-axis force/speed profile
  *   - joint interlock clamps poses that would jam index against thumb
@@ -30,7 +33,21 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* Process-data period, and deliberately NOT one millisecond.
+   This hand's application needs a little over 1 ms per control cycle, and
+   SM-Synchron restarts that cycle on every arriving frame - so at 1 kHz it
+   never finishes one and applies no output at all. That is where "the pose
+   executes only when the master disconnects" came from: the pose was
+   landing when we stopped interrupting it, not when the link died.
+   Measured 2026-08-06 (experiments/why_1khz): nothing travels below about
+   1.05 ms, and the slave's cycle-exceeded counter is exactly zero from
+   1.6 ms up. 2 ms sits inside that clean band with margin and matches
+   handd's default. See the vault's Execution_Trigger_Settled. */
+#define CYCLE_US 2000
+
 #define WAKE_MS_MAX 12000
+/* long enough for an axis to travel now that it moves during the hold,
+   rather than a wait for something to happen after the link goes away */
 #define HOLD_MS 1200
 
 static ecx_contextt ctx;
@@ -40,6 +57,15 @@ static void pd(void)
 {
    ecx_send_processdata(&ctx);
    ecx_receive_processdata(&ctx, EC_TIMEOUTRET);
+}
+
+/* run process data for a wall-clock duration; the loops below used to
+   count iterations and call them milliseconds, which was only true while
+   the period happened to be 1 ms */
+static void cyc(int ms)
+{
+   int n = (ms * 1000) / CYCLE_US, i;
+   for (i = 0; i < n; i++) { pd(); osal_usleep(CYCLE_US); }
 }
 
 static void jarr(const char *k, int16_t *v, int n, int last)
@@ -124,13 +150,20 @@ int main(int argc, char **argv)
    out[0] = 1;
    for (i = 1; i <= 6; i++)  out[i] = HS_TGT_HOLD;
    hs_profile(out, force, speed);
-   for (t = 0; t < 300; t++) { pd(); osal_usleep(1000); }
+   cyc(300);
 
    if (do_pose)
    {
-      /* wake axes stuck in STATUS=7 by wiggling around current position */
-      int asleep = 1;
-      for (t = 0; t < WAKE_MS_MAX && asleep; t++)
+      /* Wake axes stuck in STATUS=7 by wiggling around current position -
+         but only if one actually is. This used to enter the loop with
+         asleep=1 and so always sent at least one wiggle frame before
+         checking. That was invisible while the master cycled at 1 kHz,
+         because the hand applies nothing at that rate; at 2 ms the same
+         frame is a real command, and it moved all six axes 60 counts
+         before the requested pose was written. Check first. */
+      int asleep = 0;
+      for (i = 0; i < 6; i++) if (in[30 + i] == 7) asleep = 1;
+      for (t = 0; t < WAKE_MS_MAX && asleep; t += CYCLE_US / 1000)
       {
          int16_t base;
          for (i = 0; i < 6; i++)
@@ -146,7 +179,7 @@ int main(int argc, char **argv)
             asleep = 0;
             for (i = 0; i < 6; i++) if (in[30 + i] == 7) asleep = 1;
          }
-         osal_usleep(1000);
+         osal_usleep(CYCLE_US);
       }
       /* driver-level gate: nothing reaches the PDO unchecked */
       guarded  = hs_stall_relief(tgt, &in[18], &in[30], &in[6], why, sizeof why);
@@ -154,7 +187,7 @@ int main(int argc, char **argv)
       /* write the requested pose. It rides in the output buffer until the
          SM watchdog expires, which the exit below causes by going away */
       for (i = 0; i < 6; i++) out[HS_OUT_TARGET + i] = tgt[i];
-      for (t = 0; t < HOLD_MS; t++) { pd(); osal_usleep(1000); }
+      cyc(HOLD_MS);
    }
 
    printf("{\"ok\":true,\"mode\":\"%s\",\"guarded\":%d,\"guard_note\":\"%s\",",

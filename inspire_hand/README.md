@@ -18,7 +18,7 @@ live in the ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`).
 | `hand_sink.py` | Where teleop's poses go: daemon (streaming), hand_set (per-pose), or nowhere |
 | `hand_scale.py` | The one Python copy of the target scale; checks itself against `hand_ctl scale` |
 | `hand_latency.py` | Client-side stamps for the latency ruler, and a reader for the CSV |
-| `hand_ctl.c` → `hand_ctl` | C core (SOEM): wake → pose → exit; JSON telemetry; setcap, no sudo. Still cycles at 1 kHz, so its pose lands when the process leaves |
+| `hand_ctl.c` → `hand_ctl` | C core (SOEM): wake → pose → exit; JSON telemetry; setcap, no sudo. Cycles at 500 Hz, so the pose executes during the hold and the telemetry it prints is the pose that happened, not the one about to |
 | `hand_api.py` | Python lib + CLI. Gestures: open / fist / middle / point / release |
 | `hand_server.py` | HTTP JSON API bound to `127.0.0.1:8100` only (SSH tunnel in) |
 | `soem_build/hand_set.c` → `hand_set` | Lean pose setter (~2–3 s per pose); the path that predates the daemon |
@@ -107,8 +107,9 @@ that is deliberate, and `test_api_compat.py` pins it.
 
 What differs is only the cost. On the daemon path a pose is a couple of
 milliseconds and `settle=True` waits for the axes to actually stop rather
-than sleeping a fixed six seconds. On the `hand_ctl` path it is the old
-connect/write/disconnect cycle.
+than sleeping a fixed time. On the `hand_ctl` path it is a fresh
+connect/wake/write per call — about 1.9 s, most of it enumeration and the
+axis's own travel.
 
 Two details worth knowing if you extend it. `pose()` has always taken
 `force` and `speed` per call, so `handd` grew a `profile` command rather
@@ -220,7 +221,11 @@ read until that day. `0x1C32:05` advertises a 100 us minimum cycle; that
 figure is wrong on this device by an order of magnitude.
 
 So "the firmware executes a pose only after the master disconnects" was
-never true, and neither was the watchdog theory that replaced it.
+never true, and neither was the watchdog theory that replaced it. Both
+`hand_ctl` and `hand_set` now cycle at 500 Hz rather than 1 kHz, so a
+per-pose call executes while it is still connected: `hand_ctl pose`
+returns in about **1.9 s** instead of 10-20, and the JSON it prints
+describes the pose that happened.
 Starving the link for 100 ms worked for the same reason a slow feed does:
 it stops interrupting the slave. Every layer here paid 2-3 s per pose for
 a problem that was its own. Six other explanations were tested and

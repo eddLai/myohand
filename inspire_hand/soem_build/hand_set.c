@@ -12,10 +12,28 @@
 static ecx_contextt ctx;
 static uint8 IOmap[4096];
 
+/* Process-data period, and deliberately NOT one millisecond. This hand's
+   application needs a little over 1 ms per control cycle and SM-Synchron
+   restarts it on every arriving frame, so at 1 kHz it never finishes one
+   and applies no output at all - which is where "the pose executes only
+   when the master disconnects" came from. Measured 2026-08-06
+   (experiments/why_1khz): nothing travels below about 1.05 ms and the
+   slave's cycle-exceeded counter is zero from 1.6 ms up. 2 ms matches
+   handd's default. See the vault's Execution_Trigger_Settled. */
+#define CYCLE_US 2000
+
 static void pd(void)
 {
    ecx_send_processdata(&ctx);
    ecx_receive_processdata(&ctx, EC_TIMEOUTRET);
+}
+
+/* run process data for a wall-clock duration - the loops below counted
+   iterations and called them milliseconds, true only at a 1 ms period */
+static void cyc(int ms)
+{
+   int n = (ms * 1000) / CYCLE_US, i;
+   for (i = 0; i < n; i++) { pd(); osal_usleep(CYCLE_US); }
 }
 
 int main(int argc, char **argv)
@@ -59,7 +77,7 @@ int main(int argc, char **argv)
    out[0] = 1;
    hs_profile(out, force, speed);   /* shared per-axis force/speed profile */
    for (i = 1; i <= 6; i++)   out[i] = HS_TGT_HOLD;
-   for (t = 0; t < 200; t++) { pd(); osal_usleep(1000); }
+   cyc(200);
 
    need_wake = 0;
    for (i = 0; i < 6; i++) if (in[30 + i] == 7) need_wake = 1;
@@ -67,10 +85,23 @@ int main(int argc, char **argv)
    {
       printf("waking axes (STA=[%d %d %d %d %d %d])...\n",
              in[30], in[31], in[32], in[33], in[34], in[35]);
-      for (t = 0; t < 15000; t++)
+      for (t = 0; t < 15000; t += CYCLE_US / 1000)
       {
-         int16_t w = ((t / 400) % 2) ? 950 : 1050;
-         for (i = 1; i <= 6; i++) out[i] = w;
+         /* Wiggle around where each axis is, not toward a fixed pair of
+            absolute targets. The old form wrote 950/1050 to all six, which
+            at 1 kHz went nowhere because the hand applies nothing at that
+            rate - at 2 ms it would drive every axis most of the way closed
+            before the pose was written. STATUS=7 only happens from boot,
+            with the hand open and empty, so this was never reached with
+            something in the grip; it is still not a command worth
+            sending. */
+         for (i = 0; i < 6; i++)
+         {
+            int16_t base = in[6 + i];
+            if (base < HS_TGT_MIN + 80) base = HS_TGT_MIN + 80;
+            if (base > HS_TGT_MAX - 80) base = HS_TGT_MAX - 80;
+            out[1 + i] = (int16_t)(base + (((t / 400) % 2) ? 60 : -60));
+         }
          pd();
          if (t % 1000 == 0)
          {
@@ -78,14 +109,14 @@ int main(int argc, char **argv)
             for (i = 0; i < 6; i++) if (in[30 + i] == 7) need_wake = 1;
             if (!need_wake) break;
          }
-         osal_usleep(1000);
+         osal_usleep(CYCLE_US);
       }
    }
    /* driver-level gate, identical rules to hand_ctl */
    guarded  = hs_stall_relief(tgt, &in[18], &in[30], &in[6], why, sizeof why);
    guarded += hs_interlock(tgt, &in[6], why, sizeof why);
    for (i = 1; i <= 6; i++) out[i] = tgt[i - 1];
-   for (t = 0; t < 800; t++) { pd(); osal_usleep(1000); }
+   cyc(800);
    if (guarded) printf("guard: %s\n", why);
    printf("parked [%d %d %d %d %d %d] STA=[%d %d %d %d %d %d] ANG=[%d %d %d %d %d %d]\n",
           tgt[0], tgt[1], tgt[2], tgt[3], tgt[4], tgt[5],

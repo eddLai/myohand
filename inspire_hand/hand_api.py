@@ -34,11 +34,12 @@ from pathlib import Path
 import hand_scale
 
 HAND_CTL = str(Path(__file__).resolve().parent / "hand_ctl")
-# The hand_ctl path writes a pose and drops the link, so the caller has to
-# wait out the watchdog plus the axis's own travel. Mostly this number is
-# conservative margin from before either was measured, and it is why a
-# gesture call on that path feels slow.
-SETTLE_S = 6
+# hand_ctl now cycles at 500 Hz, so the pose executes during its own hold
+# and the telemetry it returns is the pose that happened. What is left to
+# wait for is the tail of the axis's travel, not a watchdog and not a
+# disconnect. Measured 2026-08-06: a pose call returns in about 1.9 s all
+# in, against 10-20 s before, and full travel is 800 ms of that.
+SETTLE_S = 1
 # On the daemon path there is no disconnect to wait for, so instead of
 # sleeping a fixed time we watch the hand until it stops moving. The cap
 # is a little over the 800 ms a finger needs for full travel.

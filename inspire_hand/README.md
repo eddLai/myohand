@@ -328,11 +328,11 @@ Measured through `handd --trigger=continuous` on the hand: a four-finger
 pose is reached in **0.4–0.5 s**, which is the mechanism's own travel and
 nothing else — the link stays up, OPERATIONAL is held, current flows the
 whole way. Per-pose costs on the older paths, all of them self-inflicted:
-`hand_ctl` ~10–20 s including the wake wiggle and telemetry, `hand_set`
-~2–3 s, and `hand_api.py` adds a 6 s settle on top of that because it was
-written when a pose had to survive a disconnect. Those two binaries still
-cycle at 1 kHz and therefore still depend on their own exit to apply
-anything; porting them onto the daemon's path is not done.
+`hand_ctl` **~1.9 s** and `hand_set` ~2–3 s, nearly all of it a fresh
+enumeration and wake per call. Both cycle at 500 Hz like the daemon now,
+so the pose executes during the hold rather than on the way out and the
+telemetry they print describes the pose that happened. What they still pay
+for, and the daemon does not, is connecting at all.
 
 ## Safety
 

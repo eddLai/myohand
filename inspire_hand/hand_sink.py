@@ -10,8 +10,10 @@ to absorb, and `handd` gives it one.
             following: the pose is pushed as it changes rather than
             waiting for the operator to hold still.
   hand_set  one subprocess per pose, the path that predates the daemon.
-            Kept as the fallback when handd is not running; it cycles at
-            1 kHz, so what applies its pose is the process exiting.
+            Kept as the fallback when handd is not running. It cycles at
+            500 Hz like the daemon since 2026-08-06, so the pose executes
+            while it is still connected - what costs the seconds is
+            spawning and connecting once per pose, not the hand.
   dry-run   nothing leaves the process. The vision chain, the mapping and
             the whole UI can be worked on with no hand and no daemon.
 

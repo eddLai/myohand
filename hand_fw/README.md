@@ -25,7 +25,6 @@ live in the ExoPulse_docs vault (`Inspire_RH56F1_Hand_Bringup_Ops_Log`).
 | `../teleop/teleop_app.py` + `../teleop/run_teleop.sh` | MediaPipe webcam gesture mirroring with a SYNC button UI |
 | `systemd/` | Unit + installer for running the daemon at boot (installs, never enables) |
 | `experiments/` | Serial + EtherCAT bring-up probes (protocol archaeology), `rt_check.sh`, and the 2026-08-06 instruments: `ecat_scan`, `ecat_interrogate`, `sii_dump`, `coe_startup`, `dc_check`, `compliant_op`, `op_execute_hunt`, `watchdog_trigger`, `wd_pace`, `syncmode_test`, `rate_sweep`, `ecat_persistent_probe`. `make probe && sudo make cap-probe` builds them; raw output in `results_2026-08-06/` |
-| `hand_pid.py` | Slow outer-loop trim: per-shot integral correction from ANGLEACT readback (pure corrector, wire into your own send path) |
 | `geometry/` | Offline STEP pipeline that generates `hand_collision_table.h` |
 | `hand_collision_table.h` | GENERATED thumb-vs-finger minimum-target tables (do not edit) |
 
@@ -381,7 +380,7 @@ Offline checks, none of which need hardware:
 
     make test && ./test_safety        # 22 interlock, scale and geometry checks
     python3 test_scale.py             # C and Python agree on the scale
-    python3 test_pid.py               # the closed-loop trim, against a plant stub
+    python3 ../pid/test_pid.py        # the closed-loop trim, against a plant stub
     python3 test_daemon.py            # the daemon, against a simulated slave
     python3 test_teleop_sink.py       # the streaming client path
     python3 test_calibration.py       # profiles cannot be clobbered
@@ -433,7 +432,7 @@ faster. Getting past that means building the palm→landmark pipeline
 directly on `ai-edge-litert`, where the thread count is yours.
 
 
-## Closed-loop trim (hand_pid.py)
+## Closed-loop trim (../pid/hand_pid.py)
 
 The firmware executes a pose only after the master disconnects (2-3 s a
 shot, no feedback while it runs), so a realtime PID is impossible; what
@@ -441,12 +440,13 @@ works is a per-shot integral trim. `HandPID.correct(req, ang_act)`
 returns the biased targets for the next shot - held (-1) axes pass
 through untouched, the integrator freezes in the deadband / on rails /
 on STA 5-6-7, and resets when the target jumps. `req` and `ang_act` are
-both ANGLEACT counts (see `hand_scale`), the same scale `handd`/`hand_ctl`/
-`hand_set` speak - the module does not rescale between them. The
-corrected targets still go through hand_safety inside hand_ctl/hand_set,
-so the trim can never bypass the interlock. Offline tests: `python3
-test_pid.py` (73 checks; convergence needs at most 3 corrected shots
-over a +-10% gain and an offset plant).
+both ANGLEACT counts (see `hand_scale`, imported across from here), the
+same scale `handd`/`hand_ctl`/`hand_set` speak - the module does not
+rescale between them. The corrected targets still go through
+hand_safety inside hand_ctl/hand_set, so the trim can never bypass the
+interlock. Code and offline tests live in `../pid/`: `python3
+pid/test_pid.py` (73 checks; convergence needs at most 3 corrected
+shots over a +-10% gain and an offset plant).
 
 ## Geometry collision tables (hand_collision_table.h)
 

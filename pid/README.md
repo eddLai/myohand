@@ -1,6 +1,6 @@
 # pid — 閉環關節控制器（規劃中，尚未實作）
 
-以 ANGLEACT 回授修正六軸目標的閉環控制。慢速外環已實作在 `../hand_fw/hand_pid.py`（純修正器，呼叫端自接 EtherCAT 送出路徑）；本檔保留原始規劃與真內環的前提條件。
+以 ANGLEACT 回授修正六軸目標的閉環控制。慢速外環已實作：`hand_pid.py`（純修正器，呼叫端自接 EtherCAT 送出路徑）＋ `test_pid.py`（離線測試，`python3 test_pid.py`）。本檔保留原始規劃與真內環的前提條件。
 
 ## 為什麼還不能做成即時迴路
 
@@ -14,11 +14,11 @@ trigger 後才可能。
 - **離線/慢速外環**：每趟 `hand_set` 都會回報 `ANG=[...]`（teleop 已
   拿它畫 reached 刻度）。可以做每趟一次修正的慢速積分外環：
   target' = target + Ki·Σ(target − ANGLEACT)，補償各軸的穩態偏差。
-- **介面約定**：輸入六軸目標（0..2000）＋上一趟 ANGLEACT 讀回；
-  輸出修正後目標，仍經 `hand_fw/hand_safety.c` 的 guard 層——
-  控制器永遠不得繞過安全層直接寫 PDO。
+- **介面約定**：輸入六軸目標（ANGLEACT，890..1850，見 `../hand_fw/hand_scale.py`）
+  ＋上一趟 ANGLEACT 讀回；輸出修正後目標，仍經 `../hand_fw/hand_safety.c` 的
+  guard 層——控制器永遠不得繞過安全層直接寫 PDO。
 - **模擬**：先用一階模型＋量測到的 ANG_CLOSED/ANG_OPEN span
-  （`camera/hand_mapping.py` 的 890..1850）調參。
+  （`../hand_fw/hand_scale.py` 的 890..1850）調參。
 
 ## 待辦
 

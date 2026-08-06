@@ -7,7 +7,7 @@
 | `emg/` | Myo 臂環擷取，靠 libemg | 可錄資料，還沒有分類器 |
 | `camera/` | MediaPipe 手部追蹤 -> 關節角度分解 (`hand_mapping.py`)、校正、mapping 測試 | 可動 |
 | `teleop/` | Webcam teleop app：儀表板 UI、SYNC/CALIBRATE/HAND 控制 | 可動 |
-| `hand_fw/` | RH56F1 的 EtherCAT 控制堆疊：C core (SOEM)、安全層、Python API + HTTP server + 常駐 daemon。技術文件在這裡 | 可動 |
+| `hand_fw/` | RH56F1 的 EtherCAT 控制堆疊：C core (SOEM)、安全層、Python API + HTTP server + 常駐 daemon。操作說明在它的 README，技術細節在 vault | 可動 |
 | `nn/` | EMG -> 姿態的網路 (labels 來自 `camera/hand_mapping.thumb_features`) | 規劃中，見其 README |
 | `pid/` | 對 ANGLEACT 回授做閉迴路關節控制 | 規劃中，見其 README |
 | `data/` | 已錄好的手勢資料集 | 見下 |
@@ -18,9 +18,13 @@ EMG 那半邊還沒有任何程式碼會去呼叫 `hand_fw/`，webcam teleop 也
 
 ## Quickstart
 
-    ./setup.sh                    # root venv + SOEM clone/cmake + C binaries + caps (sudo once)
-    ./hand_fw/hand_ctl state      # hand telemetry, no motion
-    ./teleop/run_teleop.sh        # webcam teleop window (streams into handd)
+    ./setup.sh                                     # root venv + SOEM + C binaries + caps（sudo 一次）
+    ECAT_IFACE=enp17s0 ./hand_fw/hand_ctl state     # 遙測，不會動
+    ./teleop/run_teleop.sh --iface=enp17s0          # webcam teleop 視窗（串進 handd）
+
+`hand_ctl` / `hand_set` 的網卡來自 `$ECAT_IFACE`（預設 `eth0`），`handd` 用
+`--iface=`。網卡不叫 `eth0` 又忘了給，錯誤訊息會是 `need CAP_NET_RAW or root`，
+看起來像權限問題其實是網卡名。
 
 Python 進入點走 root venv，例如 `venv/bin/python3 hand_fw/hand_api.py open`；
 `camera/` 底下的獨立腳本要從那個資料夾執行：`cd camera && ../venv/bin/python3 calibrate.py`。
@@ -34,8 +38,7 @@ Python 進入點走 root venv，例如 `venv/bin/python3 hand_fw/hand_api.py ope
 只 `conda activate` 是不夠的——`run_teleop.sh` 不看 `$PATH`，會依序退到
 `../venv` 和 `$HOME/myohand/venv`，而後者可能是別人 checkout 的環境且
 import 得過，於是靜靜地跑錯直譯器。該主機的其他細節（`DISPLAY=:1`、
-網卡、caps）見 [`hand_fw/README.md`](hand_fw/README.md) 的
-「Running the whole thing」。
+網卡、caps）見 [`hand_fw/README.md`](hand_fw/README.md) 的「跑整條鏈」。
 
 ## emg/
 
@@ -74,5 +77,8 @@ BLED112 dongle 會被 `Myo.detect_tty()` 自動找到（比對 `PID=2458:0*1`）
 
 ## hand_fw/
 
-有自己的 README，見 [`hand_fw/README.md`](hand_fw/README.md)。
-協定逆向的完整紀錄在 ExoPulse_docs vault 的 `Inspire_RH56F1_Hand_Bringup_Ops_Log`。
+怎麼跑見 [`hand_fw/README.md`](hand_fw/README.md)。技術細節都在 ExoPulse_docs vault
+的 `Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/`：`Hand_FW_Reference`
+（控制層、觸發策略、延遲、尺度推導、安全層、幾何表、teleop UI、已知限制）、
+`Execution_Trigger_Settled`（執行觸發結論）、`SOEM_Port_Plan`（移植與建置陷阱）；
+完整 bring-up 流水帳在 `Inspire_RH56F1_Hand_Bringup_Ops_Log`。

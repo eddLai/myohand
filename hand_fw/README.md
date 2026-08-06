@@ -192,6 +192,12 @@ in its own way, so all three are worth setting deliberately:
     TELEOP_PYTHON=$HOME/miniconda3/envs/myohand-teleop/bin/python \
       DISPLAY=:1 ./run_teleop.sh --iface=enp17s0 --device 0
 
+Verified 2026-08-06: `handd` reached OPERATIONAL, found the axes in
+standby (STA=7) and woke them in 201 ms, teleop ran at **29.8 FPS** over
+684 frames at 960×540, and one interrupt stopped teleop then the daemon,
+leaving no socket and no process behind. The board manages 3.9 FPS on the
+same chain, so do not carry a frame rate from one host to the other.
+
 **`TELEOP_PYTHON` is not optional in a worktree of its own.**
 `pick_python` tries `../venv` and then `$HOME/myohand/venv` — and that
 second path exists on this host, belongs to a different checkout, and

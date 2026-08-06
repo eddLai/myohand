@@ -18,6 +18,10 @@ is everything that talks to the hand itself.
 | `../teleop/teleop_app.py` + `run_teleop.sh` | MediaPipe webcam gesture mirroring with a SYNC button UI |
 | `../camera/hand_mapping.py` | Skeleton → joint targets; the mapping the teleop and the NN labels share |
 | `experiments/` | Serial + EtherCAT bring-up probes (protocol archaeology) |
+| `hand_pid.py` | Slow outer-loop trim: per-shot integral correction from ANGLEACT readback (pure corrector, wire into your own send path) |
+| `test_pid.py` | Offline tests for hand_pid, no hardware: `python3 test_pid.py` |
+| `geometry/` | Offline STEP pipeline that generates `hand_collision_table.h` |
+| `hand_collision_table.h` | GENERATED thumb-vs-finger minimum-target tables (do not edit) |
 
 ## Quick use
 
@@ -154,3 +158,34 @@ Or step by step (from the repo root):
 The 24V/3A PSU handles gestures but sits under the hand's 5 A peak-grip
 spec. Realtime streaming control and thumb force-sensor calibration
 await vendor F1 documentation.
+
+
+## Closed-loop trim (hand_pid.py)
+
+The firmware executes a pose only after the master disconnects (2-3 s a
+shot, no feedback while it runs), so a realtime PID is impossible; what
+works is a per-shot integral trim. `HandPID.correct(req, ang_act)`
+returns the biased targets for the next shot - held (-1) axes pass
+through untouched, the integrator freezes in the deadband / on rails /
+on STA 5-6-7, and resets when the target jumps. The corrected targets
+still go through hand_safety inside hand_ctl/hand_set, so the trim can
+never bypass the interlock. Offline tests: `python3 test_pid.py`
+(convergence needs at most 3 corrected shots over a +-10% gain and
++-80-unit offset plant).
+
+## Geometry collision tables (hand_collision_table.h)
+
+Generated from the vendor right-hand STEP model (geometry/, see
+geometry/README.md). The tables agree with the empirical interlock
+about the f>=600 world (no restriction) and are stricter in the
+half-curled low-rotation pocket the scalar rules miss (thumb_bend
+floors up to 1250). The scalar rules in hand_safety.c REMAIN as the
+floor: the model was calibrated on 15 anchor poses with millimetre
+margins, so only an on-hand boundary replay (conservative force/speed,
+poses stepped just outside the table boundary) may retire them.
+Regenerate after any calibration change:
+
+    geometry/venv-geo/bin/python geometry/sample_collisions.py         geometry/links.yaml <mesh_dir> <cylinders.json> <grid.npz>
+    geometry/venv-geo/bin/python geometry/build_tables.py         <grid.npz> geometry/links.yaml hand_collision_table.h
+
+build_tables refuses to write the header unless the anchor gates pass.

@@ -1,6 +1,7 @@
 /* Offline checks for the driver-level interlock: no hardware needed.
    Build: gcc -I . test_safety.c hand_safety.c -o test_safety */
 #include "hand_safety.h"
+#include "hand_collision_table.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -87,6 +88,41 @@ int main(void)
             out[HS_OUT_FORCE + AX_PINKY] == 500);
       check("thumb_bend speed reduced for that headroom",
             out[HS_OUT_SPEED + AX_THUMB_BEND] < out[HS_OUT_SPEED + AX_PINKY]);
+   }
+
+   {  /* geometry pocket the scalar rules miss: half-curled fingers,
+         thumb-bend above the 600 floor, rotation past ROT_SAFE */
+      int16_t t[6] = {2000, 2000, 200, 200, 700, 1300};
+      why[0] = 0;
+      n = hs_interlock(t, ang_open, why, sizeof why);
+      check("geometry: half-curl pocket still clamps thumb",
+            n >= 1 && t[AX_THUMB_BEND] >= 800);
+   }
+   {  /* the interlock is idempotent: a clamped pose re-clamps to itself */
+      int16_t t[6] = {0, 0, 0, 0, 0, 0};
+      why[0] = 0;
+      hs_interlock(t, ang_open, why, sizeof why);
+      why[0] = 0;
+      check("interlock reaches a fixed point",
+            hs_interlock(t, ang_open, why, sizeof why) == 0);
+   }
+   {  /* generated tables: open fingers impose nothing, values in range */
+      int i, ok_open = 1, ok_range = 1;
+      for (i = 0; i < HCT_N; i++)
+      {
+         if (hct_tb_min[HCT_N - 1][i] != 0 ||
+             hct_rot_min[HCT_N - 1][i] != 0) ok_open = 0;
+      }
+      {
+         int j;
+         for (i = 0; i < HCT_N; i++)
+            for (j = 0; j < HCT_N; j++)
+               if (hct_tb_min[i][j] < 0 || hct_tb_min[i][j] > 2050 ||
+                   hct_rot_min[i][j] < 0 || hct_rot_min[i][j] > 2050)
+                  ok_range = 0;
+      }
+      check("tables: fully-open fingers impose no clamp", ok_open);
+      check("tables: every entry within 0..2050", ok_range);
    }
 
    printf("\n%s\n", fails ? "FAILURES PRESENT" : "all checks passed");

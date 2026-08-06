@@ -1,0 +1,6 @@
+cadquery-ocp
+trimesh
+python-fcl
+numpy
+scipy
+pyyaml

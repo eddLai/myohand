@@ -1,0 +1,53 @@
+# links.yaml - STEP instance -> link groups for the RH56F1 right hand.
+# Instance ids come from assembly_inventory.json / cylinders.json
+# (tessellate.py). Columns were identified by centre-of-mass x:
+# pinky x~21, ring x~1, middle x~-19, index x~-39, thumb x~-67.
+# The CAD rest pose is the fully-open hand = target 2000 on every axis.
+
+palm:
+  # static: skeleton, soft pad, actuator block, base, bearings, nuts
+  instances: [NAUO5, NAUO17, NAUO20, NAUO21,
+              NAUO2, NAUO3, NAUO4, NAUO19, NAUO22,
+              NAUO6, NAUO7, NAUO9, NAUO15]
+
+fingers:
+  # proximal rotates about the MCP hinge (r=1.5 cylinder pair, axis // x,
+  # low-y cluster); the tip rotates about the PIP hinge (high-y cluster)
+  # coupled to the proximal by ratio `couple` (worst-cased in sampling).
+  pinky:  {proximal: NAUO14, tip: NAUO10}
+  ring:   {proximal: NAUO13, tip: NAUO11}
+  middle: {proximal: NAUO8,  tip: NAUO18}
+  index:  {proximal: NAUO16, tip: NAUO12}
+  # manual p.17: included angle 19..176.7 deg over target 0..2000,
+  # split MCP/PIP by the coupling ratio
+  sweep_deg: 157.7
+
+thumb:
+  instance: NAUO1          # single rigid solid in the CAD
+  # bend: split the mesh at the base knuckle plane and rotate the distal
+  # half; the far knuckle adds the coupled distal rotation
+  bend_hinge:  {origin: [-46.269, -38.706, 96.322], axis: [0.6101, 0.0, -0.79232]}
+  bend_distal: {origin: [-76.628, -15.853, 74.208], axis: [0.6101, 0.0, -0.79232]}
+  bend_sweep_deg: 66.6     # manual p.17: -13..53.6 deg
+  # rot: whole thumb about the palm-mount bearing axis (r=8/r=5, axis // y)
+  rot_hinge:   {origin: [-38.0, -30.0, 100.7], axis: [0.0, 1.0, 0.0]}
+  rot_sweep_deg: 75.0      # manual p.17: 90..165 deg
+  # rotation signs pinned by the smoke probe (2026-08-06): bend +1 folds
+  # the tip toward the curled fingers (-24.5, 20, 85 at full close);
+  # the auto-score had picked the wrist-ward direction
+  bend_sign: 1.0
+  rot_sign: -1.0
+
+calibration:
+  # Fitted 2026-08-06 by calibrate_anchors.py against 15 anchor poses
+  # (10 empirically-allowed / 5 observed-clash from hand_safety.c's
+  # on-hand history). The ONLY parameter set in the searched grid that
+  # classifies every anchor correctly; min clearance on allowed anchors
+  # is 1.58 mm, so treat the fit as fragile - the empirical floor in
+  # hand_safety.c stays until an on-hand boundary replay confirms it.
+  finger_mcp_share: 0.3    # MCP takes 30% of the finger sweep (couple 2.333)
+  thumb_base_share: 0.3    # base knuckle takes 30% of the bend (couple 2.333)
+  thumb_sweep_scale: 0.85  # F1 bend travel = 0.85 x manual's 66.6 deg
+  shrink: 0.92             # thumb shells shrunk about the centroid: a cell
+                           # is forbidden only on deep overlap, not a graze
+  forbid_below_mm: 0.75    # shrunk-shell clearance under this -> forbidden

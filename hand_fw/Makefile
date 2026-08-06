@@ -4,10 +4,10 @@ CFLAGS = -O2 -I $(SOEM)/include -I $(BUILD)/include -I $(SOEM)/osal -I $(SOEM)/o
 
 all: hand_ctl hand_set
 
-hand_ctl: hand_ctl.c hand_safety.c hand_safety.h $(BUILD)/libsoem.a
+hand_ctl: hand_ctl.c hand_safety.c hand_safety.h hand_collision_table.h $(BUILD)/libsoem.a
 	gcc $(CFLAGS) hand_ctl.c hand_safety.c -o hand_ctl $(BUILD)/libsoem.a -lpthread -lrt
 
-hand_set: soem_build/hand_set.c hand_safety.c hand_safety.h $(BUILD)/libsoem.a
+hand_set: soem_build/hand_set.c hand_safety.c hand_safety.h hand_collision_table.h $(BUILD)/libsoem.a
 	gcc $(CFLAGS) -I . soem_build/hand_set.c hand_safety.c -o soem_build/hand_set $(BUILD)/libsoem.a -lpthread -lrt
 
 cap: hand_ctl hand_set
@@ -16,7 +16,7 @@ cap: hand_ctl hand_set
 
 .PHONY: all cap hand_set
 
-test: test_safety.c hand_safety.c hand_safety.h
+test: test_safety.c hand_safety.c hand_safety.h hand_collision_table.h
 	gcc -I . test_safety.c hand_safety.c -o test_safety
 
 .PHONY: test

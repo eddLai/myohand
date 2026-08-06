@@ -15,3 +15,7 @@ hand_fw/soem_build/SOEM/
 hand_fw/soem_build/build/
 hand_fw/soem_build/hand_set
 hand_fw/experiments/ecat_scan
+# geometry pipeline (venv + vendor CAD stays out of the public repo)
+hand_fw/geometry/venv-geo/
+hand_fw/geometry/__pycache__/
+hand_fw/*.rar

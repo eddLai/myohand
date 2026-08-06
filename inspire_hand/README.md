@@ -122,6 +122,45 @@ daemon directly — streaming targets, latency stamps, `dc`, `stats`. Use
 `InspireHand` when you want gestures and portability, `HandClient` when
 you want the loop.
 
+## Running the whole thing
+
+Verified end to end on `.112` on 2026-08-06: camera to MediaPipe to
+mapping to `handd` to the hand, operator waves, hand follows.
+
+    # 1. the daemon, holding the bus
+    ./handd --iface=enp17s0 --socket=/tmp/handd.sock &
+
+    # 2. prove the control half before adding a camera to the picture
+    python3 verify_following.py --socket=/tmp/handd.sock
+
+    # 3. the vision half
+    conda activate myohand-teleop
+    DISPLAY=:1 python teleop_app.py --sink=daemon \
+        --socket=/tmp/handd.sock --device=0
+
+Click **SYNC** in the window; nothing is sent until you do, and the rail
+says so ("Ready - press space to send this pose"). **OPEN HAND** sends
+regardless of SYNC, which makes it the fastest way to prove the chain is
+alive.
+
+What step 2 measured: 599 targets at 50 Hz over 12 s, commanded swing 300
+counts, axis travelled 295, best-fit lag 100 ms with 8 counts of mean
+error, and the daemon's own breakdown puts **52 µs on the wire against
+82 ms of travel**. The protocol is 0.06% of the response. Everything else
+is the motor.
+
+> **Never run a second master while `handd` holds the bus.** `ecat_scan`
+> looks read-only and is not: its `config_init` drives the slave's state
+> machine, and doing that underneath a running daemon leaves the slave
+> accepting targets and applying none of them. Nothing reports it - `bus
+> up`, `al=0`, every reply `ok`, `seq` climbing, telemetry updating, no
+> motion and no current. `ecat_scan` now takes the same bus lock every
+> other tool takes and refuses rather than becoming that second master,
+> but the daemon still cannot detect the state it leaves behind. If the
+> hand stops responding while everything looks healthy, restart `handd`.
+> To read state without a second master, ask the daemon:
+> `hand_client.HandClient().state()`.
+
 ## Gesture teleop
 
 `run_teleop.sh` opens the webcam window with a SYNC button; `hand_mapping.py`

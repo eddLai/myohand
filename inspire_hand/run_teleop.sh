@@ -4,8 +4,17 @@
 # mirrors your gestures onto the Inspire RH56F1.
 #
 #   ./run_teleop.sh                       # stream into handd (default)
+#   ./run_teleop.sh --iface=enp17s0       # ...starting handd itself
 #   ./run_teleop.sh --sink=none           # no hand, no daemon: vision only
 #   ./run_teleop.sh --device 2 --rate 30  # anything teleop_app.py accepts
+#
+# With --iface (or $ECAT_IFACE) this starts handd, waits for its socket,
+# runs teleop, and stops the daemon again when teleop exits - including on
+# Ctrl+C. One terminal, one interrupt, nothing left holding the bus.
+#
+# It only stops a daemon it started. If one is already answering, this
+# uses it and leaves it running, because killing something another window
+# is driving would be a worse surprise than leaving it up.
 #
 # The interpreter is found rather than hardcoded, in this order:
 #   $TELEOP_PYTHON  ->  ./venv  ->  $HOME/inspire_hand/venv  ->  python3
@@ -22,6 +31,46 @@ if [ -z "${XAUTHORITY:-}" ]; then
 fi
 
 cd "$(dirname "$0")"
+
+# --iface=NAME is ours, not teleop_app.py's; everything else passes through
+IFACE="${ECAT_IFACE:-}"
+ARGS=()
+for a in "$@"; do
+    case "$a" in
+        --iface=*) IFACE="${a#--iface=}" ;;
+        *) ARGS+=("$a") ;;
+    esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+SOCK="${HAND_SOCKET:-/tmp/inspire_hand.sock}"
+DAEMON_PID=""
+
+daemon_answers() {
+    python3 - "$SOCK" <<'EOF' 2>/dev/null
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(1.0)
+s.connect(sys.argv[1])
+EOF
+}
+
+cleanup() {
+    [ -n "$DAEMON_PID" ] || return 0
+    echo "run_teleop: stopping the handd it started (pid $DAEMON_PID)" >&2
+    kill -TERM "$DAEMON_PID" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+        kill -0 "$DAEMON_PID" 2>/dev/null || return 0
+        sleep 0.1
+    done
+    echo "run_teleop: handd did not stop on TERM, killing" >&2
+    kill -KILL "$DAEMON_PID" 2>/dev/null || true
+}
+# INT/TERM exit, which runs the EXIT trap once - keeping the teardown in a
+# single place rather than three that can disagree.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap cleanup EXIT
 
 pick_python() {
     if [ -n "${TELEOP_PYTHON:-}" ]; then echo "$TELEOP_PYTHON"; return; fi
@@ -40,11 +89,28 @@ if ! "$PY" -c 'import cv2, mediapipe' 2>/dev/null; then
     exit 1
 fi
 
+if daemon_answers; then
+    echo "run_teleop: using the handd already on $SOCK (leaving it running)" >&2
+elif [ -n "$IFACE" ]; then
+    [ -x ./handd ] || { echo "./handd is not built - run: make handd && sudo make cap" >&2; exit 1; }
+    echo "run_teleop: starting handd on $IFACE" >&2
+    ./handd --iface="$IFACE" --socket="$SOCK" &
+    DAEMON_PID=$!
+    for _ in $(seq 1 100); do
+        daemon_answers && break
+        kill -0 "$DAEMON_PID" 2>/dev/null || { echo "handd exited during start-up" >&2; exit 1; }
+        sleep 0.1
+    done
+    daemon_answers || { echo "handd never opened $SOCK" >&2; exit 1; }
+fi
+
 # A bare first argument stays the camera index, the way this script has
 # always been called; anything starting with - goes to teleop_app.py.
+# Not exec: the EXIT trap has to survive to stop the daemon.
 if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
     DEV=$1
     shift
-    exec "$PY" teleop_app.py --device "$DEV" "$@"
+    "$PY" teleop_app.py --device "$DEV" --socket "$SOCK" "$@"
+else
+    "$PY" teleop_app.py --socket "$SOCK" "$@"
 fi
-exec "$PY" teleop_app.py "$@"

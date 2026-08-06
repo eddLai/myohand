@@ -127,21 +127,34 @@ you want the loop.
 Verified end to end on `.112` on 2026-08-06: camera to MediaPipe to
 mapping to `handd` to the hand, operator waves, hand follows.
 
+    # everything in one terminal: starts handd, runs teleop, and stops the
+    # daemon again when teleop exits - Ctrl+C included
+    ./run_teleop.sh --iface=enp17s0 --device=0
+
+or the same thing in pieces, when you want the daemon to outlive the
+window:
+
     # 1. the daemon, holding the bus
-    ./handd --iface=enp17s0 --socket=/tmp/handd.sock &
+    ./handd --iface=enp17s0 &
 
     # 2. prove the control half before adding a camera to the picture
-    python3 verify_following.py --socket=/tmp/handd.sock
+    python3 verify_following.py
 
     # 3. the vision half
-    conda activate myohand-teleop
-    DISPLAY=:1 python teleop_app.py --sink=daemon \
-        --socket=/tmp/handd.sock --device=0
+    ./run_teleop.sh --device=0        # sees the daemon, leaves it running
 
 Click **SYNC** in the window; nothing is sent until you do, and the rail
 says so ("Ready - press space to send this pose"). **OPEN HAND** sends
 regardless of SYNC, which makes it the fastest way to prove the chain is
 alive.
+
+`run_teleop.sh` only stops a daemon it started itself. If one is already
+answering it says so and leaves it alone, because killing something
+another window is driving would be the worse surprise. `handd` shuts down
+cleanly on SIGINT, SIGTERM and SIGHUP, so Ctrl+C and closing the terminal
+both end the same way - parked where it was, bus released, socket removed.
+Both it and `hand_client` read `$HAND_SOCKET`, so exporting it moves the
+pair together rather than splitting them onto two paths.
 
 What step 2 measured: 599 targets at 50 Hz over 12 s, commanded swing 300
 counts, axis travelled 295, best-fit lag 100 ms with 8 counts of mean

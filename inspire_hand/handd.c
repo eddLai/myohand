@@ -1603,6 +1603,14 @@ int main(int argc, char **argv)
 {
    int rc, i, lock_fd = -1;
    struct sigaction sa;
+   const char *env_sock = getenv("HAND_SOCKET");
+
+   /* hand_client reads HAND_SOCKET and this did not, so exporting it moved
+      the client and left the daemon on the compiled-in path - two
+      processes, two sockets, and a connection refused with nothing
+      obviously wrong. Same variable, same default, either can still be
+      overridden by --socket. */
+   if (env_sock && *env_sock) cfg.sock_path = env_sock;
 
    for (i = 0; i < MAX_CLIENTS; i++) clients[i].fd = -1;
    if (parse_args(argc, argv)) return 1;
@@ -1611,6 +1619,11 @@ int main(int argc, char **argv)
    sa.sa_handler = on_signal;
    sigaction(SIGINT, &sa, NULL);
    sigaction(SIGTERM, &sa, NULL);
+   /* Closing the terminal should end the same way Ctrl+C does. Without
+      this, SIGHUP's default action kills the process outright: the socket
+      file is left behind for the next run to trip over and nothing gets
+      logged about why it went. */
+   sigaction(SIGHUP, &sa, NULL);
    signal(SIGPIPE, SIG_IGN);       /* a client that quits mid-reply is normal */
 
    if (cfg.simulate)

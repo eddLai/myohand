@@ -95,6 +95,37 @@ bound what a 2 ms loop has to survive.
     #   ssh -L 8100:127.0.0.1:8100 eddlai@120.126.83.28
     #   curl -X POST http://127.0.0.1:8100/gesture/open
 
+## Manual smoke test on the KD240
+
+Verified 2026-08-06 against `eth1` (the PL-backed J25 port; `eth0` is the
+board's normal network uplink and never has the hand on it). Binaries
+were already built (`make -C hand_fw all && make -C hand_fw cap`) and
+the SOEM build reused from the pre-restructure checkout rather than
+rebuilt on the board.
+
+**Run every EtherCAT/`hand_ctl`/`handd` command as `ubuntu`, not root.**
+`/tmp/inspire_hand.bus.lock` is `ubuntu:ubuntu 0664`, and on this board
+root cannot `flock()` a file it does not own even though it can open it
+- `hs_lock()` then reports the generic "BUS BUSY" (indistinguishable
+from an actual second master) rather than a permission error. `sudo -u
+ubuntu ...` for each command, or `sudo -u ubuntu -i` once for a shell.
+
+    ip -br link show eth1                          # want LOWER_UP; if not, check the J25 cable
+    sudo -u ubuntu ./experiments/ecat_scan eth1     # read-only: confirms the slave answers
+    sudo -u ubuntu env ECAT_IFACE=eth1 ./hand_ctl state   # read-only telemetry
+    sudo -u ubuntu env ECAT_IFACE=eth1 ./hand_ctl scale   # confirms C and the header agree: 890..1850
+
+    # start the daemon - wakes STA=7 axes (a small in-place wiggle) and
+    # holds OPERATIONAL, but sends no pose until one is asked for
+    sudo -u ubuntu env ECAT_IFACE=eth1 ./handd --iface=eth1 &
+    sudo -u ubuntu python3 hand_client.py state     # bus:up, applying:true, sta all 2
+
+    # the actual motion test - routes through handd since it is running
+    sudo -u ubuntu python3 hand_api.py open
+
+    # release when done
+    sudo -u ubuntu pkill -TERM handd                # "shutting down (the hand keeps whatever pose it was last given)"
+
 ## One API, two paths
 
 `hand_api.InspireHand` reaches the hand through `handd` when the daemon is

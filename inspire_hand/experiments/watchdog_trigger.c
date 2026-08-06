@@ -1,5 +1,14 @@
 /* watchdog_trigger - is it the SM watchdog or the dead link?
  *
+ * SUPERSEDED 2026-08-06, kept because its measurement is still sound and
+ * only its conclusion was wrong. It found that starving process data for
+ * 100 ms moves the axis with the socket open and OPERATIONAL held, and
+ * read that as "the watchdog is the trigger". rate_sweep then showed the
+ * simpler cause: this hand applies nothing at 1 kHz because its control
+ * loop needs more than a millisecond, and any long enough quiet lets it
+ * finish one. The starve was not tripping a timeout, it was getting out
+ * of the way. See the vault's Execution_Trigger_Settled.
+ *
  * Every execution this hand has ever performed followed ecx_close(): the
  * master tore down its socket and the physical link went quiet. Two
  * different things happen at that moment and no run so far has separated
@@ -236,6 +245,12 @@ int main(int argc, char **argv)
 
    printf("-----------------------------------------------------------"
           "-------------------\n");
+   printf("NOTE 2026-08-06: the reading below was superseded the same day. "
+          "A round\nthat moves does NOT show the watchdog is the trigger - "
+          "it shows that a\nlong enough gap in process data lets the slave "
+          "finish a control cycle it\ncannot finish at 1 kHz. rate_sweep "
+          "and why_1khz have the measurement;\nthe hand follows "
+          "continuously at any period from about 1.6 ms.\n\n");
    printf("A round that moved means the SM watchdog is the trigger and the "
           "link never had to\ndrop. All rounds flat means the trigger needs "
           "the link itself to go away.\n");

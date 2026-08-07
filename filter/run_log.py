@@ -345,7 +345,12 @@ def summarise(path, skip=0.0):
     # where teleop was run from, which is teleop/, and measure_jitter lives
     # in filter/. A command that only works from one directory is one the
     # reader has to debug before they can use it.
-    a(f"   python3 {os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measure_jitter.py')} \\")
+    # sys.executable, not "python3": the summary is written by whichever
+    # interpreter ran teleop, and that is the one with matplotlib in it.
+    # The bare name resolved to the system python, which has no matplotlib,
+    # so the offered command failed the first time it was pasted.
+    a(f"   {sys.executable} \\")
+    a(f"       {os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measure_jitter.py')} \\")
     a(f"       plot {os.path.abspath(os.path.join(path, 'frames.csv'))} \\")
     a(f"       --axis {' '.join(FINGERS)} --skip 0")
     a("")

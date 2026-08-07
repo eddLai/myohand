@@ -73,7 +73,19 @@ MAP_FIELDS = (["t", "seen", "trust", "why"]
 #: sends a target, so this does not weaken the promise that nothing moves.
 TELE_FIELDS = [f"ang_{a}" for a in AXES] + [f"cur_{a}" for a in AXES]
 
-FIELDS = MAP_FIELDS + TELE_FIELDS
+#: the counts-per-input-degree in force WHEN THE RECORDING WAS MADE.
+#:
+#: Stamped because gains() reads the live mapping, and a calibration saved
+#: between recording and analysis silently re-scales every threshold derived
+#: from it - applying today's deadbands to yesterday's targets. That happened
+#: on 2026-08-07: a calibration during the first hardware trial moved the
+#: finger gain 6.04 -> 4.99 and thumb_rot 7.80 -> 4.59, and the three
+#: recordings from that morning carry no stamp because this did not exist yet.
+#: Constant down the column, which is the price of the file staying
+#: self-contained when it is copied off the machine.
+GAIN_FIELDS = [f"gain_{a}" for a in AXES]
+
+FIELDS = MAP_FIELDS + TELE_FIELDS + GAIN_FIELDS
 
 
 # ---- input-space gain ----------------------------------------------------
@@ -219,10 +231,14 @@ def commanded_old(tgts, deadband=CURRENT_DEADBAND):
     return out
 
 
-def commanded_new(tgts, ts, trust):
-    """The shipped path, driven exactly as teleop_app drives it."""
+def commanded_new(tgts, ts, trust, gains_):
+    """The shipped path, driven exactly as teleop_app drives it.
+
+    `gains_` is the recording's own, not the live mapping's: the deadbands
+    have to be the ones that were in force when these targets were computed.
+    """
     import hand_filter as hf
-    filt = hf.HandFilter.for_camera()
+    filt = hf.HandFilter(gains_)
     out, last = [], None
     for r, t, tr in zip(tgts, ts, trust):
         raw = list(r)
@@ -251,24 +267,27 @@ def plot(args):
     matplotlib.use("Agg")                      # no display on any of these hosts
     import matplotlib.pyplot as plt
 
-    g = gains()
     ax_i = AXES.index(args.axis)
-    gain = g[args.axis]
 
     panels = []
     for spec in args.csv:
         path, _, zoom = spec.partition("@")
         rows, ts, _, tgts, _ = load(path, args.skip)
+        g, stamped = recorded_gains(rows, path)
+        if args.gain:
+            g = dict(g, **{a: args.gain[i] for i, a in enumerate(AXES)})
+        gain = g[args.axis]
         trust = [r.get("trust") == "1" for r in rows]
         t0 = ts[0]
         ts = [t - t0 for t in ts]
         old = commanded_old(tgts)
-        new = commanded_new(tgts, [t + t0 for t in ts], trust)
-        panels.append((os.path.basename(path), zoom, ts, tgts, old, new))
+        new = commanded_new(tgts, [t + t0 for t in ts], trust, g)
+        panels.append((os.path.basename(path), zoom, ts, tgts, old, new,
+                       gain, stamped or bool(args.gain)))
 
     fig, axes = plt.subplots(len(panels), 1, figsize=(11, 3.1 * len(panels)),
                              squeeze=False)
-    for k, (name, zoom, ts, tgts, old, new) in enumerate(panels):
+    for k, (name, zoom, ts, tgts, old, new, gain, stamped) in enumerate(panels):
         ax = axes[k][0]
         lo, hi = (0, ts[-1])
         if zoom:
@@ -300,6 +319,10 @@ def plot(args):
         # true thing: how many counts an input degree is worth.
         ax.set_ylabel(f"ANGLEACT counts\n({gain:.1f} counts = 1 input degree)",
                       fontsize=9)
+        if not stamped:
+            ax.text(0.995, 0.03, "gains not stamped in this recording",
+                    transform=ax.transAxes, ha="right", fontsize=7,
+                    color="#b06000")
         ax.grid(alpha=0.25, lw=0.5)
         ax.set_xlim(lo, hi)
         if k == 0:
@@ -357,6 +380,7 @@ def record(args):
         cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 
     tele = open_telemetry() if args.telemetry else None
+    gain_row = [f"{gains()[a]:.4f}" for a in AXES]
 
     out = open(args.out, "w", newline="")
     w = csv.writer(out)
@@ -400,7 +424,7 @@ def record(args):
                                     + [str(v) for v in st["cur"]])
                 except Exception:              # noqa: BLE001
                     pass    # a telemetry gap must not end a 20 s recording
-            w.writerow(row + tele_row)
+            w.writerow(row + tele_row + gain_row)
             if not args.no_window:
                 left = args.seconds - t
                 cv2.putText(frame, f"HOLD STILL  {left:4.1f}s",
@@ -474,6 +498,22 @@ def settling(ts, tgts, blocks=5):
     return out
 
 
+def recorded_gains(rows, path):
+    """The gains the recording was made with, or the live ones with a warning.
+
+    An unstamped recording predates the stamp; it cannot be known which
+    calibration produced it, so say that out loud rather than quietly
+    scoring it against whatever is active today.
+    """
+    key = f"gain_{AXES[0]}"
+    if rows and rows[0].get(key):
+        try:
+            return {a: float(rows[0][f"gain_{a}"]) for a in AXES}, True
+        except (KeyError, ValueError):
+            pass
+    return gains(), False
+
+
 def telemetry(rows):
     """Per-axis (ANGLEACT, current) for the frames that carry it, or None.
 
@@ -508,7 +548,14 @@ def analyse(args):
     rows, ts, dts, tgts, dropped = load(args.csv, args.skip)
     n = len(rows)
     span = ts[-1] - ts[0]
-    g = gains()
+    g, stamped = recorded_gains(rows, args.csv)
+    if not stamped:
+        print(f"\n!! {args.csv} carries no gain stamp, so it is being scored"
+              f"\n   against the CALIBRATION ACTIVE NOW"
+              f" ({hm.ACTIVE_PROFILE or 'module defaults'})."
+              f"\n   If that is not the one it was recorded under, every"
+              f" threshold below is\n   wrong by the ratio. Re-record to"
+              f" stamp it, or pass --gain-deg.")
 
     print("\n-- did the recording settle? --")
     print("  sd per axis over five blocks. A hand that was still reads the"
@@ -709,6 +756,11 @@ def main():
     pl.add_argument("--skip", type=float, default=2.0)
     pl.add_argument("-o", "--out", default="filter_ab.png")
     pl.add_argument("--dpi", type=int, default=150)
+    pl.add_argument("--gain", type=float, nargs=6, default=None,
+                    metavar="G",
+                    help="counts per input degree for the six axes, for "
+                         "recordings made before the stamp existed. Order: "
+                         + " ".join(AXES))
     pl.set_defaults(fn=plot)
 
     args = ap.parse_args()

@@ -325,8 +325,17 @@ def plot(args):
                     label="ANGLEACT - where the hand got to (measured)")
 
         def travel(seq):
-            return sum(abs(seq[sel[j]][ax_i] - seq[sel[j - 1]][ax_i])
-                       for j in range(1, len(sel)))
+            # Skip the leading stretch where the filter has no pose yet - an
+            # axis that has never been measured has no value to travel from,
+            # and a run that opens on an untrusted thumb starts exactly
+            # there. The traces already draw those frames as gaps.
+            tot = 0.0
+            for j in range(1, len(sel)):
+                a, b = seq[sel[j]], seq[sel[j - 1]]
+                if a is None or b is None:
+                    continue
+                tot += abs(a[ax_i] - b[ax_i])
+            return tot
 
         t_old, t_new = travel(old), travel(new)
         cut = 100 * (1 - t_new / t_old) if t_old else 0

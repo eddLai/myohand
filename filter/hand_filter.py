@@ -236,6 +236,19 @@ class HandFilter:
         """Preset for the MediaPipe path, with that mapping's own gains."""
         return cls(camera_gains(), **kw)
 
+    def set_deadband_deg(self, deg):
+        """Retune the hysteresis live, in input degrees.
+
+        This is the one parameter that is an operator preference rather
+        than a measurement - "how much hand tremor do I tolerate" - and it
+        is monotonic and cliff-free, so a slider cannot put the filter
+        somewhere strange. The one-euro parameters are deliberately NOT
+        exposed that way: they interact, and beta=0 at this mincutoff is a
+        450 ms cliff that looks from the outside like a reasonable
+        simplification.
+        """
+        self.deadbands = deadbands(self.gains, deg)
+
     def reset(self):
         """Forget everything. For a source that has been disconnected -
         NOT for a dropped frame, which is what dt_max is for."""

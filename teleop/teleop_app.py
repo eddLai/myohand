@@ -43,11 +43,14 @@ sys.path.insert(0, os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "camera")))
 sys.path.insert(0, os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "hand_fw")))
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "filter")))
 
 import cv2
 import numpy as np
 import mediapipe as mp
 
+import hand_filter
 import hand_latency
 import hand_mapping as hm
 import hand_sink
@@ -77,7 +80,7 @@ CAL_HOLD = 5.0             # seconds held per pose, passed through to the tool
 PARK = [hm.T_MAX] * 6      # every joint open - the pose to leave the hand in
 show_settings = False
 SET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teleop_settings.json")
-SETTINGS = {"force": 500, "speed": 1000, "device": 4, "ema": 65}
+SETTINGS = {"force": 500, "speed": 1000, "device": 4, "deadband_deg": 1.5}
 try:
     SETTINGS.update(json.load(open(SET_PATH)))
 except FileNotFoundError:
@@ -210,7 +213,7 @@ def on_mouse(event, x, y, flags, param):
             knob = ui.settings_hit(x, y)
             if knob:
                 key, delta, lo, hi = knob
-                SETTINGS[key] = max(lo, min(hi, SETTINGS[key] + delta))
+                SETTINGS[key] = round(max(lo, min(hi, SETTINGS[key] + delta)), 1)
                 save_settings()
 
 
@@ -275,10 +278,21 @@ def main():
               f"To work on the vision chain without a hand: --sink=none",
               file=sys.stderr)
         return 1
+    # The sink's own deadband stops being the jitter defence and becomes a
+    # backstop: hand_filter gates per axis at a finer threshold than the
+    # sink's 12 counts, and leaving the coarser one in front of it would
+    # swallow releases the filter had already decided were real.
+    if args.deadband is None:
+        sink.deadband = 1
+    filt = hand_filter.HandFilter.for_camera(deg=SETTINGS["deadband_deg"])
+
     settle_frames = (args.settle_frames if args.settle_frames is not None
                      else hand_sink.settle_frames_default(sink.name))
+    print(f"filter: one-euro fc={hand_filter.MINCUTOFF} beta={hand_filter.BETA}"
+          f" dcutoff={hand_filter.DCUTOFF}, deadband={SETTINGS['deadband_deg']}"
+          f" deg, dt clamped at {hand_filter.DT_MAX*1000:.0f} ms")
     print(f"sink={sink.name}  settle_frames={settle_frames}  "
-          f"deadband={sink.deadband}"
+          f"backstop deadband={sink.deadband}"
           + (f"  rate={args.rate:g} Hz" if sink.name == "daemon" else ""))
 
     def open_camera(device):
@@ -327,6 +341,7 @@ def main():
                 cap.release()
                 cap = open_camera(SETTINGS["device"])
                 opened_device, ema = SETTINGS["device"], None
+                filt.reset()      # new source, not a dropped frame
             ok, frame = cap.read()
             if not ok:
                 # a dead camera must not take the panel with it: the hand-side
@@ -356,14 +371,19 @@ def main():
                 trust, why = hm.thumb_trust(res.multi_hand_landmarks[0].landmark,
                                             label.label, label.score)
                 raw = hm.pose_from_world_landmarks(res.multi_hand_world_landmarks[0].landmark)
-                if ema is not None and not trust:
-                    raw[4:] = ema[4:]   # MediaPipe is guessing: hold the thumb
-                if ema is None:
-                    ema = raw[:]
-                else:
-                    w = SETTINGS["ema"] / 100.0
-                    ema = [int(w * e + (1 - w) * r) for e, r in zip(ema, raw)]
-                moved = max(abs(a - b) for a, b in zip(ema, raw))
+                if not trust:
+                    # MediaPipe is guessing at the thumb. Hand the filter a
+                    # HOLD rather than a substitute value: a hold that is fed
+                    # back in as data decays into the estimate and quietly
+                    # becomes a command of its own.
+                    raw[4] = raw[5] = hand_filter.HOLD
+                filt.set_deadband_deg(SETTINGS["deadband_deg"])
+                ema = filt.update(raw, time.time())
+                # How far the filter still is from the raw signal, which is
+                # what "settling" meant when this was an EMA. Held axes are
+                # excluded: a hold names no raw value to be far from.
+                moved = max([abs(a - b) for a, b in zip(ema, raw)
+                             if b != hand_filter.HOLD] or [0])
                 quiet = quiet + 1 if moved < SETTLE_TOL else 0
                 tgt = ema[:]
                 seen += 1
@@ -408,13 +428,15 @@ def main():
                          elapsed, cal_note or sink.last_result, fps,
                          "space  send      q  quit")
 
-            # With the gate off this fires every frame and the sink decides what
-            # is worth sending; with the gate on it waits for stillness, which is
-            # what a two-to-three-second pose demands.
+            # Whether this pose is worth sending is hand_filter's decision
+            # now, taken per axis. What used to be here was a max over all
+            # six, so one noisy axis released the whole vector - measured on
+            # 2026-08-07, thumb_rot alone did that on 64% of frames and took
+            # the four fingers with it, which is the twitch the operator sees.
+            # The settle gate is still ANDed in for the hand_set sink, where
+            # a pose costs seconds; it defaults off when streaming.
             if (tgt and auto_sync and quiet >= settle_frames and not sink.busy
-                    and (last_sent is None
-                         or max(abs(a - b) for a, b in zip(tgt, last_sent))
-                         > sink.deadband)):
+                    and (filt.changed or last_sent is None)):
                 last_sent = tgt[:]
                 send_pose(tgt, stamps)
 

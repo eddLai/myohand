@@ -1,0 +1,6 @@
+# Generated figures. They regenerate from frames.csv in seconds, so what
+# matters is that they are viewable in the history, not that they are
+# diffable - and a 15,000-line diff of SVG path data on every regeneration
+# is worse than no diff at all.
+runs/**/*.svg binary
+runs/**/*.png binary

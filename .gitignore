@@ -37,5 +37,8 @@ hand_fw/geometry/venv-geo/
 hand_fw/geometry/__pycache__/
 hand_fw/*.rar
 
-# teleop run logs - data, not source; one directory per session
-runs/
+# teleop run logs - one directory per session, so most of them are churn.
+# A run whose name carries a description is one somebody kept on purpose;
+# those are evidence and belong in the history. Bare-timestamp runs do not.
+runs/*
+!runs/*_*/

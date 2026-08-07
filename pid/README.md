@@ -1,27 +1,58 @@
-# pid — 閉環關節控制器（規劃中，尚未實作）
+# pid — 閉環關節控制器（擱置）
 
-以 ANGLEACT 回授修正六軸目標的閉環控制。慢速外環已實作：`hand_pid.py`（純修正器，呼叫端自接 EtherCAT 送出路徑）＋ `test_pid.py`（離線測試，`python3 test_pid.py`）。本檔保留原始規劃與真內環的前提條件。
+以 ANGLEACT 回授修正六軸目標的閉環控制。慢速外環已實作：`hand_pid.py`（純修正器，呼叫端自接 EtherCAT 送出路徑）＋ `test_pid.py`（離線測試，`python3 test_pid.py`）。
 
-## 為什麼還不能做成即時迴路
+## ⚠️ 本檔原本的前提已經被推翻
 
-RH56F1 韌體**在 master 斷線後才執行姿勢**（見 `../hand_fw/README.md`
-的 axis semantics 一節）：`hand_set` 一趟要 2–3 秒，且執行期間拿不到
-連續回授。真正的即時 PID 要等 vendor F1 文件揭露 realtime 執行
-trigger 後才可能。
+原文寫「RH56F1 韌體**在 master 斷線後才執行姿勢**，所以做不了即時迴路」。
+**那個結論在 2026-08-06 被實機推翻了**，`../hand_fw/handd.c:16-29` 記著：
 
-## 現在就能做的部分（規劃）
+> 那個「只有斷線才會動」的舊讀數，其實只是**我們第一次停止打斷它**。
+> 觸發條件從來就不是 timeout。
 
-- **離線/慢速外環**：每趟 `hand_set` 都會回報 `ANG=[...]`（teleop 已
-  拿它畫 reached 刻度）。可以做每趟一次修正的慢速積分外環：
-  target' = target + Ki·Σ(target − ANGLEACT)，補償各軸的穩態偏差。
-- **介面約定**：輸入六軸目標（ANGLEACT，890..1850，見 `../hand_fw/hand_scale.py`）
-  ＋上一趟 ANGLEACT 讀回；輸出修正後目標，仍經 `../hand_fw/hand_safety.c` 的
-  guard 層——控制器永遠不得繞過安全層直接寫 PDO。
-- **模擬**：先用一階模型＋量測到的 ANG_CLOSED/ANG_OPEN span
-  （`../hand_fw/hand_scale.py` 的 890..1850）調參。
+手是**連續跟隨**的。所以「不能做即時迴路」這個理由已經不存在。
+
+## 但結論不變，理由換了三個（2026-08-07 量測）
+
+**1. 沒有誤差給它修。** `../hand_fw/hand_safety.h:41-71` 記著三筆實機讀值：
+命令 1100 → ANGLEACT 1101、1272 → 1274、1509 → 1508。960 counts 的行程，
+穩態誤差 1–2 counts，**0.2%**。它的內環已經把「走到我叫的角度」做完了。
+
+**2. 頻寬分離不存在。** slave 的 application cycle 量到 18–27 ms
+（`handd.c:19-25`），也就是我們最多只能讓它吃進 37–55 Hz；手指機構動一次
+是幾百 ms。串級控制要求外環比內環慢 5–10 倍，這裡擠不出來——在同一個時間
+尺度上閉迴路是 limit cycle 的標準配方。
+
+**3. 抓握時積分必定飽和。** 抓東西的定義就是位置誤差**永久存在**：命令
+890（全閉），物體在 1200 擋住手指，310 counts 的誤差永遠不會消失。任何積分項
+都會一路捲上去持續加壓，而現在擋住這件事的是韌體的力量上限和
+`hand_safety.h:93-96` 的 `hs_stall_relief`（註解直說 stall 會 *cook the
+actuator*）。外環積分器等於每抓一次東西就跟這個保護機制對打一次。
+
+## 真正的問題不在這裡
+
+症狀從來不是「手沒走到我叫的地方」，而是「我叫的地方本身在抖」——那是
+reference 的問題，不是 plant 的問題。PID 對髒的 reference 只會更糟：P 項
+原封不動放行雜訊，D 項是雜訊放大器。那條路走 [`../filter/`](../filter/)，
+它是**訊號整形**（不讀回授），已經實作並接進 teleop。
+
+回授在這個架構下的正確角色是**監督**而不是連續控制：用 `IN_CUR`/`IN_FRC`/
+`IN_STA` 偵測堵轉就退讓——也就是 `hs_stall_relief` 已經在做的事。包在黑盒子
+外面那一層該是監督者，不是第二個跟它搶方向盤的控制器。
+
+## `hand_pid.py` 為什麼還留著
+
+它是純修正器（不碰 EtherCAT、不繞過 `../hand_fw/hand_safety.c` 的 guard），
+留著有兩個理由：如果哪天在**某一軸**上量到真實的穩態偏差，它是現成的補償器；
+而 `test_pid.py` 記錄了當初的推導。**但預設不要接上去**——上面第 3 點是它
+現在接上去會出的事。
+
+要重新啟用之前，先量出**證據**：找一個實際存在的穩態誤差，而不是假設有。
 
 ## 待辦
 
-- [ ] 讀回資料的紀錄格式（每趟 target/ANG/STA/電流）
-- [ ] 慢速外環 prototype（掛在 teleop 或 hand_api 的送出路徑）
-- [ ] vendor realtime trigger 文件到手後：真 PID 內環
+- [x] ~~vendor realtime trigger 文件~~ — 2026-08-06 實機解決，手是連續跟隨的
+- [ ] 如果真的要用：先在 `runs/` 的紀錄裡找出哪一軸有可重現的穩態偏差
+      （`filter/run_log.py` 的 summary 已經逐軸列出 commanded / actual /
+      absorbed，那就是這個問題的資料）
+- [ ] 抓握時的積分飽和防護（clamp、conditional integration），沒有它就別接

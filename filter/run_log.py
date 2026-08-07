@@ -135,7 +135,8 @@ class RunLog:
                 for k in [f"curl_{x}" for x in FINGERS]
                 + ["thumb_flexion", "opposition"]]
         row += ([str(v) for v in tele["ang"]] + [str(v) for v in tele["cur"]]
-                if tele else [""] * (2 * len(AXES)))
+                + [str(v) for v in tele.get("sta") or [""] * len(AXES)]
+                if tele else [""] * (3 * len(AXES)))
         row += self._gain_row
         row += ([f"{v:.4f}" for v in sent] if sent is not None
                 else [""] * len(AXES))

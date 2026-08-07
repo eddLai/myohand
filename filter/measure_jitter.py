@@ -267,10 +267,13 @@ def plot(args):
     matplotlib.use("Agg")                      # no display on any of these hosts
     import matplotlib.pyplot as plt
 
-    ax_i = AXES.index(args.axis)
-
+    # One panel per (recording, axis). Showing every axis is the answer to
+    # the first question anyone asks of a single-axis figure, which is
+    # whether that axis was chosen because it flattered the result.
     panels = []
     for spec in args.csv:
+      for axis in args.axis:
+        ax_i = AXES.index(axis)
         path, _, zoom = spec.partition("@")
         rows, ts, _, tgts, _ = load(path, args.skip)
         g, stamped = recorded_gains(rows, path)
@@ -282,12 +285,13 @@ def plot(args):
         ts = [t - t0 for t in ts]
         old = commanded_old(tgts)
         new = commanded_new(tgts, [t + t0 for t in ts], trust, g)
-        panels.append((os.path.basename(path), zoom, ts, tgts, old, new,
-                       gain, stamped or bool(args.gain)))
+        panels.append((os.path.basename(path), axis, ax_i, zoom, ts, tgts,
+                       old, new, gain, stamped or bool(args.gain)))
 
     fig, axes = plt.subplots(len(panels), 1, figsize=(11, 3.1 * len(panels)),
                              squeeze=False)
-    for k, (name, zoom, ts, tgts, old, new, gain, stamped) in enumerate(panels):
+    for k, (name, axis, ax_i, zoom, ts, tgts, old, new, gain,
+            stamped) in enumerate(panels):
         ax = axes[k][0]
         lo, hi = (0, ts[-1])
         if zoom:
@@ -309,7 +313,7 @@ def plot(args):
 
         t_old, t_new = travel(old), travel(new)
         cut = 100 * (1 - t_new / t_old) if t_old else 0
-        ax.set_title(f"{name}   {args.axis}   commanded travel "
+        ax.set_title(f"{name}   {axis}   commanded travel "
                      f"{t_old:.0f} -> {t_new:.0f} counts  ({cut:.0f}% less)",
                      fontsize=10, loc="left")
         # Counts only. A second axis in absolute degrees would be wrong:
@@ -752,7 +756,9 @@ def main():
     pl.add_argument("csv", nargs="+",
                     help="one panel per recording. Append @centre:width in "
                          "seconds to zoom, e.g. dropout.csv@14.6:3")
-    pl.add_argument("--axis", default="ring", choices=AXES)
+    pl.add_argument("--axis", nargs="+", default=["ring"],
+                    choices=AXES,
+                    help="one panel per recording per axis")
     pl.add_argument("--skip", type=float, default=2.0)
     pl.add_argument("-o", "--out", default="filter_ab.png")
     pl.add_argument("--dpi", type=int, default=150)

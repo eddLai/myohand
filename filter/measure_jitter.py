@@ -285,12 +285,24 @@ def plot(args):
         ts = [t - t0 for t in ts]
         old = commanded_old(tgts)
         new = commanded_new(tgts, [t + t0 for t in ts], trust, g)
+        # ANGLEACT, but only from a run log - a `sent` column means the hand
+        # was being driven while this was recorded. In a measure_jitter
+        # recording nothing is commanded, so the same column is the hand
+        # sitting idle and drawing it here would be a flat line pretending
+        # to be a response.
+        act = None
+        if rows and rows[0].get("sent") is not None and rows[0].get("ang_pinky"):
+            try:
+                act = [[float(r[f"ang_{a}"]) if r.get(f"ang_{a}") else None
+                        for a in AXES] for r in rows]
+            except ValueError:
+                act = None
         panels.append((os.path.basename(path), axis, ax_i, zoom, ts, tgts,
-                       old, new, gain, stamped or bool(args.gain)))
+                       old, new, act, gain, stamped or bool(args.gain)))
 
     fig, axes = plt.subplots(len(panels), 1, figsize=(11, 3.1 * len(panels)),
                              squeeze=False)
-    for k, (name, axis, ax_i, zoom, ts, tgts, old, new, gain,
+    for k, (name, axis, ax_i, zoom, ts, tgts, old, new, act, gain,
             stamped) in enumerate(panels):
         ax = axes[k][0]
         lo, hi = (0, ts[-1])
@@ -306,6 +318,11 @@ def plot(args):
                 zorder=3, label="filter OFF - what ships today")
         ax.plot(tt, [new[i][ax_i] if new[i] else float("nan") for i in sel],
                 color="#0a7d6b", lw=1.7, zorder=4, label="filter ON")
+        if act is not None:
+            ax.plot(tt, [act[i][ax_i] if act[i][ax_i] is not None
+                         else float("nan") for i in sel],
+                    color="#26439c", lw=1.2, ls=(0, (4, 2)), zorder=5,
+                    label="ANGLEACT - where the hand got to (measured)")
 
         def travel(seq):
             return sum(abs(seq[sel[j]][ax_i] - seq[sel[j - 1]][ax_i])

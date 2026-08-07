@@ -201,6 +201,113 @@ def p2p_fingers(cols):
                for i, a in enumerate(AXES) if a in FINGERS)
 
 
+# ---- what each path actually commands ------------------------------------
+#
+# Both of these return the STAIRCASE - the pose the hand was actually
+# holding at each frame - rather than a smooth curve. That is the honest
+# thing to draw: a gate holds its last released value, so what reaches the
+# motor is a series of steps, and a plot of the underlying smooth signal
+# would show a filter doing work the hand never sees.
+
+def commanded_old(tgts, deadband=CURRENT_DEADBAND):
+    """The pre-filter path: raw targets, one max-over-six-axes deadband."""
+    out, last = [], None
+    for r in tgts:
+        if last is None or max(abs(a - b) for a, b in zip(r, last)) > deadband:
+            last = list(r)
+        out.append(list(last))
+    return out
+
+
+def commanded_new(tgts, ts, trust):
+    """The shipped path, driven exactly as teleop_app drives it."""
+    import hand_filter as hf
+    filt = hf.HandFilter.for_camera()
+    out, last = [], None
+    for r, t, tr in zip(tgts, ts, trust):
+        raw = list(r)
+        if not tr:
+            raw[4] = raw[5] = hf.HOLD
+        v = filt.update(raw, t)
+        if v is not None:
+            last = v
+        out.append(list(last) if last is not None else None)
+    return out
+
+
+# ---- plotting ------------------------------------------------------------
+
+def plot(args):
+    """Overlay the two paths on the SAME frames.
+
+    Pressing 'f' in teleop cannot produce this picture: filter on and
+    filter off are two different stretches of time in which the operator's
+    hand did two different things, so overlaying them compares two inputs
+    rather than two filters. Replaying one recording through both paths is
+    the only version of this comparison that means anything - the same
+    reason record and analyse are separate commands at all.
+    """
+    import matplotlib
+    matplotlib.use("Agg")                      # no display on any of these hosts
+    import matplotlib.pyplot as plt
+
+    g = gains()
+    ax_i = AXES.index(args.axis)
+    gain = g[args.axis]
+
+    panels = []
+    for spec in args.csv:
+        path, _, zoom = spec.partition("@")
+        rows, ts, _, tgts, _ = load(path, args.skip)
+        trust = [r.get("trust") == "1" for r in rows]
+        t0 = ts[0]
+        ts = [t - t0 for t in ts]
+        old = commanded_old(tgts)
+        new = commanded_new(tgts, [t + t0 for t in ts], trust)
+        panels.append((os.path.basename(path), zoom, ts, tgts, old, new))
+
+    fig, axes = plt.subplots(len(panels), 1, figsize=(11, 3.1 * len(panels)),
+                             squeeze=False)
+    for k, (name, zoom, ts, tgts, old, new) in enumerate(panels):
+        ax = axes[k][0]
+        lo, hi = (0, ts[-1])
+        if zoom:
+            c, w = (float(v) for v in zoom.split(":"))
+            lo, hi = c - w / 2, c + w / 2
+        sel = [i for i, t in enumerate(ts) if lo <= t <= hi]
+        tt = [ts[i] for i in sel]
+
+        ax.plot(tt, [tgts[i][ax_i] for i in sel], color="#c9c9c9", lw=0.8,
+                zorder=1, label="raw from the camera")
+        ax.plot(tt, [old[i][ax_i] for i in sel], color="#d1495b", lw=1.3,
+                zorder=3, label="filter OFF - what ships today")
+        ax.plot(tt, [new[i][ax_i] if new[i] else float("nan") for i in sel],
+                color="#0a7d6b", lw=1.7, zorder=4, label="filter ON")
+
+        def travel(seq):
+            return sum(abs(seq[sel[j]][ax_i] - seq[sel[j - 1]][ax_i])
+                       for j in range(1, len(sel)))
+
+        t_old, t_new = travel(old), travel(new)
+        cut = 100 * (1 - t_new / t_old) if t_old else 0
+        ax.set_title(f"{name}   {args.axis}   commanded travel "
+                     f"{t_old:.0f} -> {t_new:.0f} counts  ({cut:.0f}% less)",
+                     fontsize=10, loc="left")
+        ax.set_ylabel("ANGLEACT counts")
+        ax.grid(alpha=0.25, lw=0.5)
+        ax.set_xlim(lo, hi)
+        if k == 0:
+            ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
+        right = ax.twinx()                     # the same axis, in input degrees
+        b, t = ax.get_ylim()
+        right.set_ylim(b / gain, t / gain)
+        right.set_ylabel("input degrees")
+    axes[-1][0].set_xlabel("seconds")
+    fig.tight_layout()
+    fig.savefig(args.out, dpi=args.dpi)
+    print(f"wrote {args.out}")
+
+
 # ---- recording -----------------------------------------------------------
 
 def open_telemetry():
@@ -590,6 +697,16 @@ def main():
                     help="input tolerance the per-axis gate column is built "
                          f"from, in degrees (default {SWEEP_DEG})")
     an.set_defaults(fn=analyse)
+
+    pl = sub.add_parser("plot", help="overlay filter off vs on, same frames")
+    pl.add_argument("csv", nargs="+",
+                    help="one panel per recording. Append @centre:width in "
+                         "seconds to zoom, e.g. dropout.csv@14.6:3")
+    pl.add_argument("--axis", default="ring", choices=AXES)
+    pl.add_argument("--skip", type=float, default=2.0)
+    pl.add_argument("-o", "--out", default="filter_ab.png")
+    pl.add_argument("--dpi", type=int, default=150)
+    pl.set_defaults(fn=plot)
 
     args = ap.parse_args()
     args.fn(args)

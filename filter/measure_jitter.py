@@ -219,11 +219,13 @@ def p2p_fingers(cols):
     hard while leaving the visible swing where it was. Fingers only, for
     the same reason finger_travel exists.
 
-    On a still recording this also picks up slow drift - the operator's
-    hand sagging over twenty seconds - which no filter should remove and
-    every filter will therefore score alike on. A p2p that refuses to fall
-    while travel collapses means drift dominates, not that the filter
-    failed.
+    Being an extremum it is maximally sensitive to single frames, so a
+    p2p_f that refuses to fall while travel collapses means low-frequency
+    content the filter cannot touch - and that is NOT automatically drift.
+    On the first real still.csv it was a settling transient in the opening
+    seconds, and reading it as drift would have been wrong: 118 counts
+    became 37 once the head of the recording was skipped. Check the
+    settling block before concluding anything from this column.
     """
     return max(max(cols[i]) - min(cols[i])
                for i, a in enumerate(AXES) if a in FINGERS)
@@ -346,15 +348,50 @@ def record(args):
 
 # ---- analysis ------------------------------------------------------------
 
-def load(path):
+def load(path, skip=0.0):
+    """Frames with a hand in them, dropping the first `skip` seconds.
+
+    The head of a recording is the operator arriving in frame and
+    MediaPipe converging on them, not a still hand. Measured on the first
+    real still.csv, 2026-08-07: the index axis reads sd 17.3 counts over
+    the whole twenty seconds and 6.3 from four seconds on, and its p2p
+    falls 118 -> 37. Folding that in inflates every threshold derived from
+    it, and an over-smoothed filter pays for the artefact in latency.
+    """
     with open(path) as f:
         rows = [r for r in csv.DictReader(f) if r["seen"] == "1"]
     if not rows:
         sys.exit(f"{path} has no frames with a hand in them")
-    ts = [float(r["t"]) for r in rows]
-    tgts = [[float(r[f"tgt_{a}"]) for a in AXES] for r in rows]
+    t0 = float(rows[0]["t"])
+    kept = [r for r in rows if float(r["t"]) - t0 >= skip]
+    if not kept:
+        sys.exit(f"--skip={skip} left no frames of {path}")
+    ts = [float(r["t"]) for r in kept]
+    tgts = [[float(r[f"tgt_{a}"]) for a in AXES] for r in kept]
     dts = [max(1e-3, ts[i] - ts[i - 1]) if i else 0.033 for i in range(len(ts))]
-    return rows, ts, dts, tgts
+    return kept, ts, dts, tgts, len(rows) - len(kept)
+
+
+def settling(ts, tgts, blocks=5):
+    """Per-block sd per axis, so an unsettled recording cannot pass as noise.
+
+    A hand that was actually still reads about the same in every block. A
+    first block several times the last is the recording still converging,
+    and it is worth seeing rather than averaging away - this is the check
+    that would have caught the 2026-08-07 still.csv before its numbers were
+    used for anything.
+    """
+    n = len(tgts)
+    b = max(1, n // blocks)
+    out = []
+    for k in range(blocks):
+        lo = k * b
+        hi = n if k == blocks - 1 else min((k + 1) * b, n)
+        if lo >= hi:
+            continue
+        out.append(((ts[lo], ts[hi - 1]),
+                    [stats([s[i] for s in tgts[lo:hi]])[1] for i in range(6)]))
+    return out
 
 
 def telemetry(rows):
@@ -387,10 +424,26 @@ def stats(col):
 
 
 def analyse(args):
-    rows, ts, dts, tgts = load(args.csv)
+    _, ts_all, _, tgts_all, _ = load(args.csv, 0.0)
+    rows, ts, dts, tgts, dropped = load(args.csv, args.skip)
     n = len(rows)
     span = ts[-1] - ts[0]
     g = gains()
+
+    print("\n-- did the recording settle? --")
+    print("  sd per axis over five blocks. A hand that was still reads the"
+          " same in\n  every one; a loud first block is the operator arriving"
+          " and MediaPipe\n  converging, and it belongs in no noise figure.")
+    print(f"{'block':<14}" + "".join(f"{a[:9]:>10}" for a in AXES))
+    blocks = settling(ts_all, tgts_all)
+    for (lo, hi), sds in blocks:
+        print(f"{f'{lo:5.1f}-{hi:4.1f}s':<14}"
+              + "".join(f"{v:>10.1f}" for v in sds))
+    if len(blocks) > 1 and max(blocks[0][1]) > 2.0 * max(blocks[-1][1]):
+        print(f"  the first block is {max(blocks[0][1])/max(blocks[-1][1]):.1f}x"
+              " the last: this recording had not settled when it started")
+    print(f"\n  --skip={args.skip}s drops {dropped} of {dropped + n} frames"
+          + ("  (--skip=0 to keep them)" if dropped else ""))
 
     print(f"\n{args.csv}: {n} frames with a hand, {span:.1f} s")
     live = [d for d in dts[1:]]
@@ -544,6 +597,10 @@ def main():
 
     an = sub.add_parser("analyse", help="report noise and sweep thresholds")
     an.add_argument("csv")
+    an.add_argument("--skip", type=float, default=2.0,
+                    help="drop this many seconds off the front, where the "
+                         "recording is still settling (default 2.0, 0 keeps "
+                         "everything). The settling block shows what it cost")
     an.add_argument("--deg", type=float, default=SWEEP_DEG,
                     help="input tolerance the per-axis gate column is built "
                          f"from, in degrees (default {SWEEP_DEG})")

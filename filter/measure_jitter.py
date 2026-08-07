@@ -71,7 +71,12 @@ MAP_FIELDS = (["t", "seen", "trust", "why"]
 #: filled only with `record --telemetry`: what the hand reported on the same
 #: frame. Read-only - the recorder asks the daemon for `state` and never
 #: sends a target, so this does not weaken the promise that nothing moves.
-TELE_FIELDS = [f"ang_{a}" for a in AXES] + [f"cur_{a}" for a in AXES]
+#: `sta` is the hand's own per-axis status word; 5 and 6 are the stall
+#: codes hs_stall_relief keys off. Logged because a 1.4 A stall was
+#: diagnosed from current and position alone on 2026-08-07, and the one
+#: column that would have said so outright was not being kept.
+TELE_FIELDS = ([f"ang_{a}" for a in AXES] + [f"cur_{a}" for a in AXES]
+               + [f"sta_{a}" for a in AXES])
 
 #: the counts-per-input-degree in force WHEN THE RECORDING WAS MADE.
 #:

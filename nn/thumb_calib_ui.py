@@ -96,11 +96,28 @@ POSES = [
                               "只轉不折，不要真的碰到小指",
      "opposition", "OPP_MAX", "hi"),
 ]
-# pairs that must differ in one channel only, and the channel that betrays
-# the operator having moved a different joint than the one being measured
-CHECKS = [("P3", "P4", "opposition", "折拇指的時候不該轉"),
-          ("P5", "P6", "flexion", "轉拇指的時候不該折")]
+# Pairs that should differ in one channel only, and the channel that
+# betrays a different joint having moved. The two are not equally the
+# operator's fault, so they do not carry the same consequence.
+#
+# P3->P4 is: did you fold the thumb, or rotate it? That is entirely up to
+# the operator -- the 2026-08-06 recording drifted 124 degrees here and
+# was measuring the wrong joint, while a careful run on 2026-08-07 came in
+# at 0.1. Worth refusing over.
+#
+# P5->P6 is: did flexion stay put while you swept? It does not, and not
+# because of anything the operator did. Sweeping the thumb across the palm
+# moves the measured flexion by about 42 degrees on real frames; it is a
+# property of the landmarks under occlusion, measured and written up in
+# README.md. Refusing over it would reject every honest recording, which
+# teaches people to route around the check. It is reported and left alone.
+CHECKS = [("P3", "P4", "opposition", "折拇指的時候不該轉", "refuse"),
+          ("P5", "P6", "flexion", "掃對掌會帶到彎曲讀數（模型的已知洩漏，非操作問題）",
+           "warn")]
 CONTAMINATED = 30.0
+# an endpoint that jumps this far from the window in force usually means a
+# pose was demonstrated less fully than last time, not that the hand changed
+MOVED_A_LOT = 15.0
 
 CH = ("flexion", "abduction", "opposition", "curl")
 MODELS = (0, 1)
@@ -405,17 +422,21 @@ print("\n\n########  動作檢查：量 A 的時候有沒有動到 B  ########")
 print("（2026-08-06 那次就是敗在這裡：標示為「捲曲」的五秒裡，")
 print("  opposition 走了 124 度、flexion 只走 60，量到的是轉不是折）\n")
 contaminated = []
-for a, b, chan, msg in CHECKS:
+for a, b, chan, msg, mode in CHECKS:
     va, vb = values(a, CPLX, chan), values(b, CPLX, chan)
     if len(va) < 3 or len(vb) < 3:
         print("  %s -> %s  %-12s 可用幀不足，無法檢查" % (a, b, chan))
         continue
     drift = abs(pct(vb, 50) - pct(va, 50))
-    bad = drift > CONTAMINATED
-    if bad:
+    over = drift > CONTAMINATED
+    if over and mode == "refuse":
         contaminated.append((a, b, chan, drift, msg))
-    print("  %s -> %s  %-12s 變化 %6.1f°   %s"
-          % (a, b, chan, drift, "⚠️ 汙染 — %s" % msg if bad else "OK"))
+        verdict = "⛔ 汙染，拒絕寫入 — %s" % msg
+    elif over:
+        verdict = "⚠️ %s" % msg
+    else:
+        verdict = "OK"
+    print("  %s -> %s  %-12s 變化 %6.1f°   %s" % (a, b, chan, drift, verdict))
 
 print("\n\n########  提案的窗（%s）  ########" % NAME[CPLX])
 print("端點取姿勢分佈的 p10 / p90，兩端各留約一成餘裕。")
@@ -430,7 +451,11 @@ for tag, zh, _d, chan, key_name, end in POSES:
     val = round(pct(v, 10 if end == "lo" else 90), 1)
     proposed[key_name] = val
     cur = getattr(hm, key_name)
-    print("%-14s %10s %12s   %+.1f" % (key_name, cur, val, val - cur))
+    moved = val - cur
+    print("%-14s %10s %12s   %+.1f%s"
+          % (key_name, cur, val, moved,
+             "   ← 跟現行差很多，%s 這次做得夠滿嗎" % tag
+             if abs(moved) > MOVED_A_LOT else ""))
 
 for lo_k, hi_k in (("CURL_OPEN", "CURL_CLOSED"), ("THUMB_OPEN", "THUMB_CLOSED"),
                    ("OPP_MIN", "OPP_MAX")):

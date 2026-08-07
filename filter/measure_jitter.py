@@ -293,15 +293,18 @@ def plot(args):
         ax.set_title(f"{name}   {args.axis}   commanded travel "
                      f"{t_old:.0f} -> {t_new:.0f} counts  ({cut:.0f}% less)",
                      fontsize=10, loc="left")
-        ax.set_ylabel("ANGLEACT counts")
+        # Counts only. A second axis in absolute degrees would be wrong:
+        # the mapping is affine - 1034 counts is 150 degrees of curl, not
+        # zero - so counts/gain is meaningful for a DIFFERENCE and nonsense
+        # for a value. The gain goes in the label, where it says the one
+        # true thing: how many counts an input degree is worth.
+        ax.set_ylabel(f"ANGLEACT counts\n({gain:.1f} counts = 1 input degree)",
+                      fontsize=9)
         ax.grid(alpha=0.25, lw=0.5)
         ax.set_xlim(lo, hi)
         if k == 0:
-            ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
-        right = ax.twinx()                     # the same axis, in input degrees
-        b, t = ax.get_ylim()
-        right.set_ylim(b / gain, t / gain)
-        right.set_ylabel("input degrees")
+            ax.legend(loc="upper left", fontsize=8, framealpha=0.9,
+                      bbox_to_anchor=(0.0, -0.02))
     axes[-1][0].set_xlabel("seconds")
     fig.tight_layout()
     fig.savefig(args.out, dpi=args.dpi)

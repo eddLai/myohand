@@ -1,0 +1,45 @@
+run           2026-08-07T20-50-36
+commit        a5c01a6
+host          ntk-Default-string
+calibration   session-20260807-180953
+filter        one-euro fc=0.05 beta=0.0005 dcutoff=4.0, deadband=1.5 deg, dt<=0.066s
+sink          daemon
+
+frames        1105 total, 1104 with a hand (100%)
+duration      37.3 s at 29.6 FPS
+frame time    median 32 ms, p95 41 ms, max 218 ms
+filter        ON throughout
+
+-- commanded travel, ANGLEACT counts over the whole run --
+   filter OFF is RECONSTRUCTED: the hand followed whichever path was
+   actually running. The reconstruction is deterministic, not a guess.
+   axis          filter OFF  filter ON   less   raw sd
+   pinky              11842       2709    77%    199.7
+   ring                9625       2857    70%    261.7
+   middle              9147       2730    70%    248.4
+   index              10847       2695    75%    222.9
+   thumb_bend          5294        632    88%     48.2
+   thumb_rot          11421       1163    90%     89.3
+
+replay check  matches what was sent: 1104/1104 frames identical, worst 0.0 counts
+
+-- what the hand actually did (1104/1104 frames) --
+   commanded is inferred from the raw stream; actual is ANGLEACT,
+   measured. 'absorbed' is what the mechanism did not execute.
+   Idle draws 0 mA on every axis (2026-08-07), so any current here
+   is what these commands cost the actuator.
+   axis          commanded   actual  absorbed  cur mean  cur max
+   pinky              2709     2435       10%      14.6      122
+   ring               2857     2642        8%      13.4      122
+   middle             2730     2625        4%      11.8      105
+   index              2695     2357       13%       9.5       88
+   thumb_bend          632      606        4%       8.6       64
+   thumb_rot          1163     1301      -12%       7.4      111
+
+-- to plot it --
+   /home/ntk/myohand/venv/bin/python3 \
+       /home/ntk/myohand-feat-filter-stage/filter/measure_jitter.py \
+       plot /home/ntk/myohand-feat-filter-stage/runs/2026-08-07T20-50-36/frames.csv \
+       --axis pinky ring middle index --skip 0 \
+       -o /home/ntk/myohand-feat-filter-stage/runs/2026-08-07T20-50-36/plot.svg
+

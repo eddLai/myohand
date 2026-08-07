@@ -133,6 +133,42 @@ travel 在耦合 gate 是 452、逐軸是 38，十二倍差距；`one-euro fc=0.
 表裡最好的一列永遠只是「提供的選項裡最兇的那個」。它只說某個設定拿掉多少
 抖動；代價是延遲，而延遲不在那張表上。
 
+## run_log.py：每次 teleop 都留下紀錄
+
+不用加任何旗標，跑 teleop 就會在 `runs/<時間戳>/` 留下：
+
+    frames.csv    每一幀
+    meta.json     濾波參數、校正 profile、git commit、sink
+    summary.txt   人看的那份，退出時直接印出來
+
+**記的是 raw，不是濾波後的。** 一次 live run 只有一條路徑在跑，所以 before/after
+不可能是兩次量測——它是**一次量測加一次重建**，而重建是精確的（raw 過舊 gate
+是確定性的）。記 raw 還有一個好處：**參數之後會重調，舊的 log 可以拿新參數重新
+評分**；記濾波後的輸出只是某個下午設定值的紀錄。
+
+`sent_*` 還是照存，而且不是多餘的——summary 會把 raw 重放一次，**檢查它能不能
+重現當時實際送出的值**。沒有別的東西能抓到「這個檔案描述的濾波器已經不是程式碼
+裡那個」。
+
+**畫圖不自動跑，只印指令。** matplotlib 絕不能擋在「一次 run」和「它的紀錄」
+之間——KD240 只有 1.9 GB RAM，連 mediapipe 都差點裝不下。`summary.txt` 純標準庫
+產生，不會失敗。
+
+### 三條曲線裡只有一條是量到的
+
+| 曲線 | 來源 |
+|---|---|
+| filter OFF | **重建**（raw 過舊 gate） |
+| filter ON | **重放**（raw 過出貨的濾波器，且驗證過能重現 `sent_*`） |
+| **ANGLEACT** | **量測**——手真正到達的位置 |
+
+第三條回答了前兩條只能暗示的問題：**我們指揮的動作，機構到底執行了多少**。
+summary 裡逐軸列出 commanded / actual / absorbed。
+
+兩個但書寫在程式碼裡：它是**每個相機幀取樣一次**，而手每 18–27 ms 才套用一次，
+所以**不能拿來當時序參考**；而且它含有 RH56F1 自己的伺服延遲，所以
+commanded→actual 的差距是**整條鏈**的，不是這一格的。
+
 ## 不屬於這一格的東西
 
 - **slew limit（速率上限）** 屬於 `hand_fw`，跟 `hand_safety.c` 同層。
@@ -177,4 +213,5 @@ travel 在耦合 gate 是 452、逐軸是 38，十二倍差距；`one-euro fc=0.
 ## 測試
 
     python3 test_measure_jitter.py     # 離線，不需要鏡頭或手
+    python3 test_run_log.py            # 同上
     python3 test_hand_filter.py        # 同上

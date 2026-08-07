@@ -229,6 +229,15 @@ with tempfile.TemporaryDirectory() as d:
               [w for w in plot_cmd.split() if w.endswith("frames.csv")][0])
           and "plot " in plot_cmd,
           "both the script and the data are absolute")
+    # It offered only the four fingers for a while, which quietly hid both
+    # thumb axes - including thumb_bend, while thumb_bend was the thing
+    # under investigation.
+    check("and plots every axis, not just the ones in finger_travel",
+          all(a in plot_cmd for a in AXES),
+          ", ".join(a for a in AXES if a not in plot_cmd) or "all six present")
+    check("and writes the figure into the run directory",
+          any(w.endswith(".svg") and os.path.isabs(w)
+              for w in plot_cmd.split()))
     # Actually deny it the library rather than grepping the source for the
     # word - the first version of this check failed the moment a comment
     # explained why matplotlib is absent.

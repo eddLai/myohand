@@ -85,17 +85,22 @@ FIELDS = MAP_FIELDS + TELE_FIELDS
 # from these gains is what makes one number mean one thing.
 
 def gains():
-    """counts per input degree, per axis, read from the live mapping."""
-    span = hm.T_MAX - hm.T_MIN
-    finger = span / abs(hm.CURL_CLOSED - hm.CURL_OPEN)
-    return {
-        **{f: finger for f in FINGERS},
-        "thumb_bend": span / abs(hm.THUMB_CLOSED - hm.THUMB_OPEN),
-        "thumb_rot": (hm.T_MAX - hm.ROT_MIN) / abs(hm.OPP_MAX - hm.OPP_MIN),
-    }
+    """counts per input degree, per axis, read from the live mapping.
+
+    Delegated to hand_filter for the same reason the filters are: the
+    thresholds this file sweeps have to be the thresholds the filter
+    builds, or the sweep is choosing a number for somebody else.
+    """
+    import hand_filter
+    return hand_filter.camera_gains()
 
 
 # ---- filters -------------------------------------------------------------
+#
+# Imported from hand_filter rather than defined here, and that direction
+# matters: the instrument that picks the parameters has to be running the
+# code that ships. Two copies drift, and the day they do, every number this
+# file prints becomes a measurement of something nobody is using.
 #
 # Both are time-based. The EMA in teleop_app.py is not: it applies a fixed
 # per-frame weight, so its time constant tracks whatever frame rate the
@@ -103,42 +108,7 @@ def gains():
 # FPS MediaPipe falls to while re-detecting on the KD240. Same slider, seven
 # times the smoothing. Anything proposed as a replacement has to take dt.
 
-def ema(series, dts, tau):
-    """Exponential smoothing with a real time constant, in seconds."""
-    out, y = [], None
-    for x, dt in zip(series, dts):
-        if y is None:
-            y = x
-        else:
-            a = 1.0 - math.exp(-dt / tau) if tau > 0 else 1.0
-            y += a * (x - y)
-        out.append(y)
-    return out
-
-
-def one_euro(series, dts, mincutoff=1.0, beta=0.0, dcutoff=1.0):
-    """Cutoff rises with speed: heavy smoothing when still, light when moving.
-
-    The trade-off a fixed alpha cannot escape - jitter when still or lag
-    when moving, pick one - is exactly what this filter was designed for,
-    and noisy 3D tracking driving an actuator is the case it was designed
-    on. beta=0 degenerates to a plain low-pass at mincutoff.
-    """
-    def alpha(cutoff, dt):
-        tau = 1.0 / (2.0 * math.pi * cutoff)
-        return 1.0 / (1.0 + tau / dt)
-
-    out, x_hat, dx_hat = [], None, 0.0
-    for x, dt in zip(series, dts):
-        if x_hat is None:
-            x_hat = x
-        else:
-            dx = (x - x_hat) / dt
-            dx_hat += alpha(dcutoff, dt) * (dx - dx_hat)
-            cutoff = mincutoff + beta * abs(dx_hat)
-            x_hat += alpha(cutoff, dt) * (x - x_hat)
-        out.append(x_hat)
-    return out
+from hand_filter import ema, one_euro          # noqa: E402  (after sys.path)
 
 
 # ---- gates ---------------------------------------------------------------
@@ -560,10 +530,20 @@ def analyse(args):
 
     raw_cols = [[t[i] for t in tgts] for i in range(6)]
     score("raw (no filter)", raw_cols)
+
+    import hand_filter as hf
+    score(f"SHIPPED fc={hf.MINCUTOFF} b={hf.BETA}",
+          [one_euro(c, dts, hf.MINCUTOFF, hf.BETA, hf.DCUTOFF)
+           for c in raw_cols])
+
     for tau in (0.05, 0.1, 0.2, 0.4):
         score(f"ema tau={tau}s", [ema(c, dts, tau) for c in raw_cols])
-    for mc in (0.5, 1.0, 2.0):
-        for beta in (0.0, 0.005, 0.02):
+    # beta reaches down to 5e-4 because that is where the useful setting
+    # turned out to live, an order of magnitude below the smallest value a
+    # coarser sweep had tried - and a grid that does not contain the answer
+    # reports, quite convincingly, that the answer does not exist.
+    for mc in (0.05, 0.5, 1.0, 2.0):
+        for beta in (0.0, 0.0005, 0.005, 0.02):
             score(f"one-euro fc={mc} b={beta}",
                   [one_euro(c, dts, mc, beta) for c in raw_cols])
     print("\n  p2p_f is the largest peak-to-peak swing among the four fingers"
@@ -572,9 +552,14 @@ def analyse(args):
           " A p2p_f that will not\n  fall while travel collapses is slow"
           " drift, which is real hand movement\n  and not the filter's to"
           " remove.")
-    print("\n  a filter that scores low on travel but was measured only on a"
-          "\n  still hand says nothing about lag - that needs a moving"
-          "\n  recording, which is the next measurement, not this one.\n")
+    print("\n  THIS TABLE CANNOT CHOOSE A FILTER. On a still recording more"
+          " smoothing\n  always scores better, without limit, so the best row"
+          " here is only ever\n  the most aggressive row offered. It says how"
+          " much jitter a setting\n  removes; what that costs is lag, it is"
+          " not on this page, and it needs\n  the moving recording. Read the"
+          " SHIPPED row as a reference point - has\n  the noise moved since"
+          " those parameters were chosen - and not as a\n  contestant that"
+          " won or lost.\n")
 
 
 def main():

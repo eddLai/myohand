@@ -55,6 +55,35 @@ T_MIN, T_MAX = 1034, hand_scale.TARGET_MAX
 # limits are not otherwise characterised - see hand_fw/hand_safety.h).
 ROT_MIN = 1226
 
+# Thumb-bend has its own travel too, and it is nothing like the global
+# scale. MEASURED ON THE HAND, 2026-08-07, from eight teleop run logs
+# (runs/*_open_and_close and siblings; every frame carries ANGLEACT and
+# current, see filter/run_log.py):
+#
+#   open end   1375. Commanded above 1500 and HELD FOR TEN SECONDS, ANGLEACT
+#              stayed at exactly 1375 and drew 0 mA the whole time. Not
+#              slowness - the axis is capped at speed 500 by hs_profile, but
+#              ten seconds is many times its full travel, and a motor that
+#              is still trying does not draw nothing.
+#   closed end 1123. It reaches this and stops; commanding 1042 pinned it
+#              there and ramped the current 109 -> 1397 mA, held for over
+#              0.4 s. That is the stall hand_safety.h:93-96 warns cooks the
+#              actuator, and it happened because this file was asking for
+#              1034.
+#
+# So the usable travel is 252 counts, not the 816 the axis was being driven
+# over: three quarters of the command range fell outside the mechanism and
+# the bottom of it was doing damage. BEND_MIN keeps 17 counts clear of the
+# closed stop for the same reason T_MIN sits above the scale's bottom.
+# BEND_MAX is the measured stop exactly, because resting against the open
+# end costs nothing - it is where the axis idles anyway.
+#
+# This is the per-axis sweep hand_safety.h:63-68 says has not been done. It
+# still has not been done properly: these are the limits the operator's own
+# gestures happened to reach, so they are a lower bound on travel, and only
+# for this unit. A deliberate sweep would settle them.
+BEND_MIN, BEND_MAX = 1140, 1375
+
 # The scale itself lives in hand_scale (mirroring hand_safety.h). Nothing
 # here recomputes it, so what a target number means is answered in one
 # file.
@@ -327,13 +356,20 @@ def pose_from_world_landmarks(lm, handedness=None):
     Targets are ANGLEACT counts: ~890 closed, ~1850 open. thumb_rot is
     driven by the opposition angle alone: swept across the palm -> ROT_MIN
     (the palm-ward hard stop), reposed in the palm plane -> open.
+
+    Only the four fingers span the whole scale. The two thumb axes have
+    their own travel and are mapped onto it - thumb_rot onto ROT_MIN..T_MAX
+    and thumb_bend onto BEND_MIN..BEND_MAX, which is 252 counts against the
+    fingers' 816. Driving an axis over a range it does not have does not
+    produce a bigger gesture; it produces a stall at the end of it.
     """
     tgt = []
     for name in ("pinky", "ring", "middle", "index"):
         curl = finger_curl(lm, FINGER_CHAINS[name])
         tgt.append(_scale(curl, CURL_CLOSED, CURL_OPEN, T_MIN, T_MAX))
     tf = thumb_features(lm, handedness)
-    tgt.append(_scale(tf["flexion"], THUMB_CLOSED, THUMB_OPEN, T_MIN, T_MAX))
+    tgt.append(_scale(tf["flexion"], THUMB_CLOSED, THUMB_OPEN,
+                      BEND_MIN, BEND_MAX))
     tgt.append(_scale(tf["opposition"], OPP_MAX, OPP_MIN, ROT_MIN, T_MAX))
     return tgt
 

@@ -352,7 +352,12 @@ def summarise(path, skip=0.0):
     a(f"   {sys.executable} \\")
     a(f"       {os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measure_jitter.py')} \\")
     a(f"       plot {os.path.abspath(os.path.join(path, 'frames.csv'))} \\")
-    a(f"       --axis {' '.join(FINGERS)} --skip 0")
+    # Land the figure next to the data it came from. Without -o it defaults
+    # into whatever directory the reader happened to be standing in, which
+    # is how you end up with filter_ab.png in teleop/ and no idea which run
+    # it belongs to.
+    a(f"       --axis {' '.join(FINGERS)} --skip 0 \\")
+    a(f"       -o {os.path.abspath(os.path.join(path, 'plot.png'))}")
     a("")
     return "\n".join(out) + "\n"
 

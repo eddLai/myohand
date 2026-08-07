@@ -8,9 +8,35 @@
 東西必須就是出貨的東西，兩份拷貝一旦漂移，掃描印出來的每個數字就變成在
 量一個沒人在用的程式。這跟 `gains()` 從 live mapping 現算是同一個原則。
 
+## 怎麼跑
+
+在 .112 上，就這三行：
+
+    ssh ntk112
+    cd ~/myohand-feat-filter-stage/teleop
+    DISPLAY=:1 ./run_teleop.sh --device 0
+
+`run_teleop.sh` 會自己找直譯器、自己接上已經在跑的 `handd`。**handd 沒在跑**
+的話加 `--iface=eno1`，它會順便起一個、結束時再收掉。
+
+視窗開了之後：
+
+| 操作 | 作用 |
+|---|---|
+| **`A`**（或點 SYNC） | **開始跟隨。不按這個手不會動** |
+| `f` | 濾波器 開/關，即時切換來對照。畫面下方會顯示現在是哪個 |
+| SETTINGS → Deadband | 邊跑邊調容忍度（度） |
+| `q` | 結束，並把這次的 summary 直接印出來 |
+
+結束後紀錄在 `../runs/<時間戳>/`。要圖的話，summary 最後一行就是可以直接
+複製貼上的指令。
+
+不想碰手、只想看視覺那半邊：加 `--sink=none`。
+
+---
+
 已經接進 `teleop_app.py`：內嵌的 EMA 和兩處重複的 deadband 都收掉了，
-`hand_sink` 的 deadband 退成 1 count 的防呆下限。跑 teleop 時按 `f` 可以
-即時把濾波器移出路徑（還原成完全一樣的舊行為）來當場對照。
+`hand_sink` 的 deadband 退成 1 count 的防呆下限。
 
 ## 為什麼需要這一格
 

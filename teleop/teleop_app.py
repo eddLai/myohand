@@ -530,6 +530,7 @@ def main():
                             # every command, and the summary would report 100%
                             # absorbed as though that were about the hand.
                             tele = {"ang": st["ang"], "cur": st["cur"],
+                                    "sta": st.get("sta"),
                                     "applying": st.get("applying")}
                     except Exception:                       # noqa: BLE001
                         pass    # telemetry is a bonus; never lose a frame for it

@@ -205,10 +205,11 @@ class HandFilter:
         if filt.changed:
             sink.send(out)
 
-    `out` is always six values - the current commanded pose, which is the
-    last released one while the gate is holding. `changed` says whether it
-    differs from what the caller was last told to send, so a still hand
-    produces no traffic at all rather than traffic that happens to repeat.
+    `out` is six values - the current commanded pose, which is the last
+    released one while the gate is holding - or None while some axis has
+    never been measured. `changed` says whether the pose differs from what
+    the caller was last told to send, so a still hand produces no traffic
+    at all rather than traffic that happens to repeat.
 
     Why the gate is per-axis: hand_sink._moved_enough takes the max over
     all six axes, so one noisy axis releases the whole vector, including
@@ -284,10 +285,14 @@ class HandFilter:
             else:
                 out[i] = self._filters[i].update(x, dt)
         if any(v is None for v in out):
-            # nothing has ever been measured on some axis; nothing to send
+            # Some axis has never been measured - a first frame that arrived
+            # already holding. There is no pose yet, so say so rather than
+            # handing back a vector with holes in it: callers index every
+            # axis (the UI gauge does, and crashed doing it), and a partial
+            # pose that looks like a pose is worse than no pose.
             self._out = out
             self.changed = False
-            return [v for v in out]
+            return None
         self._out = out
 
         if self._sent is None:

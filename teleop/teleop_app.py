@@ -355,10 +355,14 @@ def main():
                 # How far the filter still is from the raw signal, which is
                 # what "settling" meant when this was an EMA. Held axes are
                 # excluded: a hold names no raw value to be far from.
-                moved = max([abs(a - b) for a, b in zip(ema, raw)
+                moved = max([abs(a - b) for a, b in zip(ema or [], raw)
                              if b != hand_filter.HOLD] or [0])
                 quiet = quiet + 1 if moved < SETTLE_TOL else 0
-                if use_filter:
+                if ema is None:
+                    # an axis has never been seen - the filter has no pose to
+                    # give yet, and the UI already knows what None means
+                    tgt = None
+                elif use_filter:
                     tgt = ema[:]
                 else:
                     # HOLD is the filter's vocabulary; the old path substituted

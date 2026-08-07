@@ -1,0 +1,5 @@
+# One operator's recorded sessions. The scripts here replay them offline, so
+# the CSVs stay useful on the machine that recorded them - but a code repo is
+# the wrong place for a few megabytes of one person's hand, and the next
+# person's answers have to come from their own hand anyway.
+*.csv

@@ -786,8 +786,13 @@ def main():
                     choices=AXES,
                     help="one panel per recording per axis")
     pl.add_argument("--skip", type=float, default=2.0)
-    pl.add_argument("-o", "--out", default="filter_ab.png")
-    pl.add_argument("--dpi", type=int, default=150)
+    pl.add_argument("-o", "--out", default="filter_ab.svg",
+                    help="format comes from the extension. .svg is the "
+                         "default because on a run-log-sized plot it is both "
+                         "sharper at any zoom and smaller than a 150 dpi "
+                         ".png; .pdf is smaller again; .png takes --dpi")
+    pl.add_argument("--dpi", type=int, default=150,
+                    help="raster formats only; ignored for .svg and .pdf")
     pl.add_argument("--gain", type=float, nargs=6, default=None,
                     metavar="G",
                     help="counts per input degree for the six axes, for "

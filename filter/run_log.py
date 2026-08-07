@@ -362,7 +362,12 @@ def summarise(path, skip=0.0):
     # smaller than a 150 dpi raster (884 KB against 1.1 MB, measured on a
     # 70 s six-axis run). Swap the extension for .pdf (smaller still) or
     # .png (with --dpi) if something downstream needs a bitmap.
-    a(f"       --axis {' '.join(FINGERS)} --skip 0 \\")
+    # All six, not just the fingers. `finger_travel` is the headline number
+    # because the fingers are what the operator watches, and that reasoning
+    # got copied into the plot command where it does not belong: it left out
+    # both thumb axes, including the one whose travel was being investigated
+    # at the time.
+    a(f"       --axis {' '.join(AXES)} --skip 0 \\")
     a(f"       -o {os.path.abspath(os.path.join(path, 'plot.svg'))}")
     a("")
     return "\n".join(out) + "\n"

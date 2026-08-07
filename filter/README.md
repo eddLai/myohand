@@ -3,8 +3,12 @@
 `nn`/`camera` 吐出的六軸目標到 `hand_fw` 之間的那一格。負責一件事：
 **手沒在動的時候，不要送任何動作給馬達**；手在動的時候，不要因此變鈍。
 
-目前只有量測工具（`measure_jitter.py`），還沒有 `hand_filter.py`。
-參數要從真實雜訊數據來，所以先量再寫。
+`hand_filter.py` 是出貨的那一份，`measure_jitter.py` 是選參數的量測工具。
+**濾波器的實作放在 `hand_filter.py`，`measure_jitter` import 它**——量測的
+東西必須就是出貨的東西，兩份拷貝一旦漂移，掃描印出來的每個數字就變成在
+量一個沒人在用的程式。這跟 `gains()` 從 live mapping 現算是同一個原則。
+
+還沒接進 `teleop_app.py`。
 
 ## 為什麼需要這一格
 
@@ -85,12 +89,62 @@ travel 在耦合 gate 是 452、逐軸是 38，十二倍差距；`one-euro fc=0.
   濾掉它買不到任何可觀察的東西。
 - 閒置電流是零點。之後量「抖動讓馬達做了多少功」時，要拿這個當對照組。
 
+## hand_filter.py
+
+介面是一幀一次，caller 只在被通知時才送：
+
+    filt = hand_filter.HandFilter.for_camera()
+    out = filt.update(raw_targets, now)
+    if filt.changed:
+        sink.send(out)
+
+`out` 永遠是六個值（gate 在擋的時候就是上次放行的那個姿勢），`changed` 說
+這次值不值得送。順序是 **one-euro（dt 有 clamp）→ 逐軸遲滯 → hold**。
+
+### 參數，以及它們是哪裡來的
+
+| 參數 | 值 | 依據 |
+|---|---|---|
+| `MINCUTOFF` | 0.05 Hz | 靜止雜訊有 65–83% 的變異數在 1.8 Hz 以下，是慢速游移不是高頻抖動。基線幾乎凍結（τ≈3.2 s） |
+| `BETA` | 0.0005 | 在這個 mincutoff 下**是必要的**：beta=0 量到 450 ms 延遲，有 beta 是 69 ms |
+| `DCUTOFF` | 4.0 | 速度估計決定 beta 何時放行。dc=1.0 是 96 ms，dc=4.0 是 69 ms，抖動相同 |
+| `DEADBAND_DEG` | 1.5° | 一個角度容忍度乘各軸 gain。四指 9 counts、thumb_bend 13 |
+| `DT_MAX` | 66 ms | ≈2× 中位幀時。夾住後 gap 大小完全無影響（實測 122/232/470/634 ms 都是 37.8%），不夾是 44→52% |
+
+教科書的 one-euro 預設值（fc=1.0, beta=0.007）在這裡實測是**錯的**。
+`beta=0` 看起來像「簡化成單純低通」的合理清理，實際上會讓延遲變成六倍。
+
+### 這些參數之後一定要再調
+
+現在這組的來源是**一位操作者、一個光線、一台相機、一次 session**
+（20 s 靜止 + 30 s 移動），而且**沒有在真手上跑過**。會讓它失效的：
+
+- 換操作者——手的大小和穩定度不同
+- 重新校正——`calibrate.py` 一改視窗，gain 就變（門檻會自動跟著改，但雜訊本身不會）
+- 換平台——KD240 在 MediaPipe 重偵測時掉到 ~4 FPS，dt 分布跟 .112 的 30 FPS 完全不同
+- 換光線、換相機
+
+所以：**參數全部是 constructor 參數，不是寫死的常數**。重調的流程就是重錄
+一次 `still.csv` + `moving.csv`，重跑 sweep，把新值傳進去。`analyse` 的
+`filters x gates` 表裡永遠有一列 `SHIPPED`，直接讀現在 `hand_filter.py`
+的值，所以一眼就看得出「現在裝的這組，在新的雜訊下還合不合理」。
+
+⚠️ 那張表**不能拿來選參數**。靜止資料上平滑越多永遠越好、沒有上限，所以
+表裡最好的一列永遠只是「提供的選項裡最兇的那個」。它只說某個設定拿掉多少
+抖動；代價是延遲，而延遲不在那張表上。
+
 ## 不屬於這一格的東西
 
 - **slew limit（速率上限）** 屬於 `hand_fw`，跟 `hand_safety.c` 同層。
   它是機構的物理性質，不是某個訊號源的偏好；換掉 filter 或多接一個訊號源
   都不該動到那條保護。而且它對本症狀幫助不大——小振幅高頻雜訊照樣穿過
   速率限制，它擋的是大跳變。
+
+  **這條在 2026-08-07 被重新檢視過，結論不變。** dropout 分析顯示單幀可以
+  跳到 370 counts（滿量程 45%），而濾波器**在設計上就不會擋它**——快速的
+  真實動作本來就該通過（實測：300 counts 的輸入跳變，一般幀也會放行 38%）。
+  所以硬上限仍然需要，仍然屬於 `hand_fw`。這一格負責的是 `DT_MAX`：不讓
+  掉幀把濾波器「解除平滑」，那是訊號源的性質，屬於這裡。
 - **class-level debouncing** 屬於未來 `nn/` 那條 EMG 路徑。那裡的輸入是
   類別不是位置，需要的是 rejection、majority vote、dwell time
   （libemg 的 `add_rejection` / `add_majority_vote` 現成就有）。
@@ -102,19 +156,25 @@ travel 在耦合 gate 是 452、逐軸是 38，十二倍差距；`one-euro fc=0.
 
 ## 待辦
 
-- [ ] 在實機錄一段 still.csv（開 `--telemetry`），取得真實的每軸雜訊數字
-- [ ] 再錄一段「慢慢動」的，因為 travel 只評得出靜止表現，評不出延遲
-- [ ] 錄一段有掉幀的（手移出畫面再移回、遮擋）。one-euro 的
-      `alpha = 1/(1+tau/dt)` 在 dt 變大時趨近 1，等於**幾乎不濾**——
-      MediaPipe 重新偵測的那一瞬間姿態最不可靠，濾波卻最弱。
-      偵測乾淨連續的 still.csv 永遠照不出這件事。
-- [ ] 手端驅動對照：命令一個固定姿勢 hold 住、記電流，跟 `--telemetry`
-      的閒置電流比。這是「抖動到底讓馬達做了多少功」唯一誠實的量法，
-      也是這一格的正當性數字
-- [ ] `hand_filter.py`：逐軸遲滯 ＋ 吃 `dt` 的平滑，參數由上面兩份數據定
+- [x] 在實機錄一段 still.csv（開 `--telemetry`）—— .112，2026-08-07
+- [x] 再錄一段「慢慢動」的 —— `moving.csv`，30 s，涵蓋完整 816 counts 行程
+- [x] 錄一段有掉幀的 —— `dropout.csv`，4 個 gap，最長 634 ms
+- [x] `hand_filter.py`：one-euro ＋ dt clamp ＋ 逐軸遲滯，參數由上面三份數據定
+- [ ] **延遲評分工具**。目前最大的缺口：`analyse` 只算 travel，在會動的錄影上
+      那個數字沒有意義，所以現在的參數是靠一次性的離線腳本選出來的，沒有
+      進 repo。要能重調就必須把它變成常設工具——對 `moving.csv` 量每組參數
+      的延遲（最佳時間位移法；實測 cross-correlation 會低估 30–40%、
+      onset-crossing 會被雜訊帶偏），跟 travel 併成一張表
 - [ ] 接進 `teleop_app.py`，把內嵌的 EMA 和兩處重複的 deadband 收掉
 - [ ] `hand_sink.py` 的 `deadband` 退成防呆下限，不再是主要的抖動防線
+- [ ] 手端驅動對照：命令一個固定姿勢 hold 住、記電流，跟 `--telemetry`
+      的閒置電流比。這是「抖動到底讓馬達做了多少功」唯一誠實的量法，
+      也是這一格的正當性數字。**閒置基準已經有了**：540 幀裡 ANGLEACT 幾乎
+      只有一個相異值、電流全程 0，所以我們的雜訊（sd 6–17 counts）比手能
+      分辨的高 20–50 倍——沒有任何一軸低於底線可以省略濾波
+- [ ] 全部只在離線資料上驗證過，**沒有任何一項在真手上跑過**
 
 ## 測試
 
     python3 test_measure_jitter.py     # 離線，不需要鏡頭或手
+    python3 test_hand_filter.py        # 同上

@@ -52,6 +52,7 @@ import mediapipe as mp
 
 import hand_filter
 import hand_latency
+import run_log
 import hand_mapping as hm
 import hand_sink
 import teleop_ui as ui
@@ -254,6 +255,14 @@ def build_parser():
     ap.add_argument("--headless", action="store_true",
                     help="run the camera, mapping and sink with no window. "
                          "The whole vision chain over SSH, no display needed.")
+    ap.add_argument("--runs", default=None,
+                    help="directory to write one run log per session into "
+                         "(default ../runs). Every run leaves frames.csv, "
+                         "meta.json and summary.txt; the plot command is "
+                         "printed at the end rather than run, so a machine "
+                         "without matplotlib still records everything.")
+    ap.add_argument("--no-log", action="store_true",
+                    help="do not record this run at all")
     ap.add_argument("--max-frames", type=int, default=0,
                     help="stop after N frames and print a summary; 0 = run "
                          "until q")
@@ -291,6 +300,26 @@ def main():
     if args.deadband is None:
         sink.deadband = 1
     filt = hand_filter.HandFilter.for_camera(deg=SETTINGS["deadband_deg"])
+
+    runlog = None
+    if not args.no_log:
+        root = args.runs or os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "runs"))
+        try:
+            runlog = run_log.RunLog.open(
+                root, gains=hand_filter.camera_gains(),
+                filter_params={"mincutoff": hand_filter.MINCUTOFF,
+                               "beta": hand_filter.BETA,
+                               "dcutoff": hand_filter.DCUTOFF,
+                               "deg": SETTINGS["deadband_deg"],
+                               "dt_max": hand_filter.DT_MAX},
+                extra={"sink": sink.name, "device": SETTINGS["device"],
+                       "calibration": hm.ACTIVE_PROFILE or "(module defaults)",
+                       "rate_hz": args.rate})
+            print(f"run log: {runlog.path}")
+        except Exception as e:                              # noqa: BLE001
+            # A run that cannot be recorded is still a run worth flying.
+            print(f"not recording this run ({e})", file=sys.stderr)
 
     settle_frames = (args.settle_frames if args.settle_frames is not None
                      else hand_sink.settle_frames_default(sink.name))
@@ -366,6 +395,7 @@ def main():
                 frame = cv2.flip(frame, 1)
                 res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             tgt = None
+            raw_log = None
 
             trust, why = True, ""
             if res and res.multi_hand_landmarks and res.multi_hand_world_landmarks:
@@ -377,6 +407,7 @@ def main():
                 trust, why = hm.thumb_trust(res.multi_hand_landmarks[0].landmark,
                                             label.label, label.score)
                 raw = hm.pose_from_world_landmarks(res.multi_hand_world_landmarks[0].landmark)
+                raw_log = list(raw)     # before HOLD is written into it
                 if not trust:
                     # MediaPipe is guessing at the thumb. Hand the filter a
                     # HOLD rather than a substitute value: a hold that is fed
@@ -458,10 +489,26 @@ def main():
             else:
                 worth = (max(abs(a - b) for a, b in zip(tgt, last_sent))
                          > BYPASS_DEADBAND)
+            just_sent = False
             if tgt and auto_sync and quiet >= settle_frames and not sink.busy \
                     and worth:
                 last_sent = tgt[:]
                 send_pose(tgt, stamps)
+                just_sent = True
+
+            if runlog is not None:
+                tele = None
+                if sink.name == "daemon":
+                    try:
+                        st = sink._client.state()
+                        if st.get("bus") == "up":
+                            tele = {"ang": st["ang"], "cur": st["cur"]}
+                    except Exception:                       # noqa: BLE001
+                        pass    # telemetry is a bonus; never lose a frame for it
+                runlog.frame(t=time.time(), seen=raw_log is not None,
+                             raw=raw_log, sent=last_sent, was_sent=just_sent,
+                             mode="on" if use_filter else "off",
+                             trust=trust, why=why, tele=tele)
 
             if args.max_frames and frames >= args.max_frames:
                 break
@@ -492,6 +539,14 @@ def main():
         # instead of held by a process that is already gone.
         cap.release()
         sink.close()
+        if runlog is not None:
+            try:
+                path = runlog.close()
+                print(f"\nrun log written to {path}")
+                print(open(os.path.join(path, "summary.txt")).read(), end="")
+            except Exception as e:                          # noqa: BLE001
+                print(f"run log incomplete ({e}) - frames.csv is still there",
+                      file=sys.stderr)
     if not args.headless:
         cv2.destroyAllWindows()
     dt = max(time.time() - t_start, 1e-6)

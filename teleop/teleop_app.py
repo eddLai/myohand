@@ -71,6 +71,12 @@ sink = None                # where poses go; see hand_sink.open_sink
 settle_frames = 5          # 0 disables the gate entirely
 auto_sync = False
 direct = False             # --direct; also passed down to the calibration tool
+# 'f' flips the filter out of the path so the two can be compared on the same
+# hand in the same light. Bypass is the OLD behaviour exactly: raw targets and
+# one max-over-six-axes deadband, which is what makes it a fair comparison
+# rather than just a louder version of the new one.
+use_filter = True
+BYPASS_DEADBAND = 12       # what hand_sink.Sink.deadband was
 CAM_RETRY = 3.0            # seconds between reopen attempts while offline
 last_sent = None
 cal_note = ""              # what the last calibration attempt did
@@ -272,7 +278,7 @@ def build_parser():
 
 
 def main():
-    global auto_sync, cal_request, direct, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
+    global auto_sync, cal_request, direct, last_sent, show_settings, sink, settle_frames, SETTLE_TOL, use_filter
     args = build_parser().parse_args()
 
     SETTLE_TOL = args.settle_tol
@@ -409,7 +415,13 @@ def main():
                 moved = max([abs(a - b) for a, b in zip(ema, raw)
                              if b != hand_filter.HOLD] or [0])
                 quiet = quiet + 1 if moved < SETTLE_TOL else 0
-                tgt = ema[:]
+                if use_filter:
+                    tgt = ema[:]
+                else:
+                    # HOLD is the filter's vocabulary; the old path substituted
+                    # the last smoothed value, so reproduce that to compare.
+                    tgt = [ema[i] if raw[i] == hand_filter.HOLD else raw[i]
+                           for i in range(len(raw))]
                 seen += 1
                 stamps.mapped()     # targets are ready; the rest is the daemon's
             else:
@@ -450,7 +462,7 @@ def main():
             progress = 1.0 if settle_frames == 0 else min(1.0, quiet / settle_frames)
             ui.draw_rail(frame, headline, hint, tone, progress,
                          elapsed, cal_note or sink.last_result, fps,
-                         "space  send      q  quit")
+                         "space send   f  filter " + ("ON" if use_filter else "OFF") + "   q quit")
 
             # Whether this pose is worth sending is hand_filter's decision
             # now, taken per axis. What used to be here was a max over all
@@ -459,8 +471,15 @@ def main():
             # the four fingers with it, which is the twitch the operator sees.
             # The settle gate is still ANDed in for the hand_set sink, where
             # a pose costs seconds; it defaults off when streaming.
-            if (tgt and auto_sync and quiet >= settle_frames and not sink.busy
-                    and (filt.changed or last_sent is None)):
+            if not tgt or last_sent is None:
+                worth = bool(tgt)          # the first pose always goes
+            elif use_filter:
+                worth = filt.changed       # decided per axis, inside the filter
+            else:
+                worth = (max(abs(a - b) for a, b in zip(tgt, last_sent))
+                         > BYPASS_DEADBAND)
+            if tgt and auto_sync and quiet >= settle_frames and not sink.busy \
+                    and worth:
                 last_sent = tgt[:]
                 send_pose(tgt, stamps)
 
@@ -477,6 +496,9 @@ def main():
                 send_pose(tgt, stamps)
             elif k == ord("a"):
                 auto_sync = not auto_sync
+            elif k == ord("f"):
+                use_filter = not use_filter
+                last_sent = None
             elif k == ord("c"):
                 toggle_calibration()
             elif k == ord("o"):

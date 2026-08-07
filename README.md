@@ -19,32 +19,51 @@ EMG 那半邊還沒有任何程式碼會去呼叫 `hand_fw/`，webcam teleop 也
 
 ## Quickstart
 
-    ./setup.sh                                     # root venv + SOEM + C binaries + caps（sudo 一次）
-    ECAT_IFACE=enp17s0 ./hand_fw/hand_ctl state     # 遙測，不會動
-    ./teleop/run_teleop.sh --iface=enp17s0          # webcam teleop 視窗（串進 handd）
+**在 .112（`ssh ntk112`，手接在那台）上跑 teleop**，checkout 在
+`~/myohand-feat-filter-stage`：
 
-teleop 每跑一次就在 `runs/<時間戳>/` 留下 `frames.csv`、`meta.json` 和
-`summary.txt`，退出時把 summary 印出來；`runs/` 已 gitignore。視窗裡按 `f`
-可以即時把濾波器移出路徑，還原成舊行為來當場對照——見
+    cd ~/myohand-feat-filter-stage/teleop
+    DISPLAY=:1 ./run_teleop.sh --device 0        # handd 沒在跑就加 --iface=eno1
+
+`run_teleop.sh` 自己找直譯器、自己接上已經在跑的 `handd`（沒有就起一個，
+結束時收掉）。視窗開了之後**要按 `A` 或點 SYNC 才會開始跟隨**，`f` 切換
+濾波器開關來當場對照，`q` 結束並印出這次的 summary。細節見
 [`filter/README.md`](filter/README.md)。
 
-`hand_ctl` / `hand_set` 的網卡來自 `$ECAT_IFACE`（預設 `eth0`），`handd` 用
-`--iface=`。網卡不叫 `eth0` 又忘了給，錯誤訊息會是 `need CAP_NET_RAW or root`，
-看起來像權限問題其實是網卡名。
+每跑一次就在 `runs/<時間戳>/` 留下 `frames.csv`、`meta.json` 和
+`summary.txt`；`runs/` 已 gitignore。
 
-Python 進入點走 root venv，例如 `venv/bin/python3 hand_fw/hand_api.py open`；
-`camera/` 底下的獨立腳本要從那個資料夾執行：`cd camera && ../venv/bin/python3 calibrate.py`。
+**第一次架這台機器**（或換一台）：
 
-環境在 conda 而不是 root venv 的機器（例如 `ntk112`），要用 `TELEOP_PYTHON`
-明講用哪個直譯器：
+    ./setup.sh                                    # venv + SOEM + C binaries + caps（sudo 一次）
+    ECAT_IFACE=eno1 ./hand_fw/hand_ctl state      # 遙測，不會動；先確認手在線上
 
-    TELEOP_PYTHON=$HOME/miniconda3/envs/myohand-teleop/bin/python \
-      DISPLAY=:1 ./teleop/run_teleop.sh --iface=enp17s0 --device 0
+網卡名每台不一樣（`.112` 是 `eno1`，`.28` 是 `eno1`，KD240 依線接在哪是
+`eth0`/`eth1`/`eth2`）——**先用 `ecat_scan` 列出來，不要猜**。
+`hand_ctl` / `hand_set` 讀 `$ECAT_IFACE`（預設 `eth0`），`handd` 用 `--iface=`。
+給錯的話錯誤訊息是 `need CAP_NET_RAW or root`，看起來像權限問題，其實是網卡名。
 
-只 `conda activate` 是不夠的——`run_teleop.sh` 不看 `$PATH`，會依序退到
-`../venv` 和 `$HOME/myohand/venv`，而後者可能是別人 checkout 的環境且
-import 得過，於是靜靜地跑錯直譯器。該主機的其他細節（`DISPLAY=:1`、
-網卡、caps）見 [`hand_fw/README.md`](hand_fw/README.md) 的「跑整條鏈」。
+### 直譯器
+
+`run_teleop.sh` 自己找，順序是
+`$TELEOP_PYTHON` → `../venv` → `$HOME/myohand/venv` → `python3`。
+在 .112 上它落在 `$HOME/myohand/venv`（mediapipe 0.10.21、cv2 4.11），
+所以從 `myohand-feat-filter-stage` 這個 checkout 跑也不用設任何東西。
+
+**它不看 `$PATH`**，所以只 `conda activate` 是沒用的——環境在別處的話要
+明講：
+
+    TELEOP_PYTHON=/path/to/bin/python DISPLAY=:1 ./teleop/run_teleop.sh --device 0
+
+這個 fallback 順序有個陷阱：`$HOME/myohand/venv` 可能是**別人 checkout 的
+環境**，而且 import 得過，於是靜靜地跑錯直譯器而不報錯。
+
+直接叫 Python 進入點時要自己給路徑，例如
+`~/myohand/venv/bin/python3 hand_fw/hand_api.py open`；`camera/` 底下的
+獨立腳本要從那個資料夾執行（`cd camera && ...`）。
+
+該主機的其他細節（`DISPLAY=:1`、caps）見
+[`hand_fw/README.md`](hand_fw/README.md) 的「跑整條鏈」。
 
 ## emg/
 

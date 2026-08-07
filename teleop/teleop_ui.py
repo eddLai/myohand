@@ -58,7 +58,11 @@ HAND_BTN = (650, 16, 830, 64)
 ROWS = (("Grip force", "force", 100, 100, 1000, " g"),
         ("Speed", "speed", 100, 50, 1000, ""),
         ("Camera", "device", 1, 0, 5, ""),
-        ("Smoothing", "ema", 5, 0, 90, " %"))
+        # Deadband, not smoothing: the one-euro parameters are measured and
+        # interact, and beta=0 at the shipped mincutoff is a 450 ms cliff
+        # that would look from here like turning smoothing down a notch.
+        # This one is an operator preference and monotonic. See filter/.
+        ("Deadband", "deadband_deg", 0.5, 0.5, 4.0, " deg"))
 PLATE = (16, 80, 452, 78 + len(ROWS) * 46)
 ROW0, ROWH = 138, 46
 MINUS_X, PLUS_X, STEP_W = 330, 388, 44

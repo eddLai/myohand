@@ -25,7 +25,8 @@ for head, hint, tone, sf, secs, tgt, busy, sync, tele in states:
     ui.draw_button(f, ui.PARK_BTN, False, "OPEN HAND", enabled=not busy)
     ui.draw_button(f, ui.SET_BTN, sync, "SETTINGS", ui.VIOLET)
     if sync:
-        ui.draw_settings(f, {"force": 500, "speed": 1000, "device": 4, "ema": 65})
+        ui.draw_settings(f, {"force": 500, "speed": 1000, "device": 4,
+                             "deadband_deg": 1.5})
     ui.draw_rail(f, head, hint, tone, sf, secs, tele, 29.4,
                  "space  send      q  quit")
     tiles.append(f)

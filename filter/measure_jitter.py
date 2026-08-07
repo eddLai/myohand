@@ -365,7 +365,12 @@ def plot(args):
                       bbox_to_anchor=(0.0, -0.02))
     axes[-1][0].set_xlabel("seconds")
     fig.tight_layout()
-    fig.savefig(args.out, dpi=args.dpi)
+    # No creation date in the metadata. These figures are committed next to
+    # the runs they describe, and a timestamp means regenerating one churns
+    # a third of a megabyte in the history while changing nothing anybody
+    # can see. Same input, same bytes.
+    meta = {"Date": None} if str(args.out).endswith((".svg", ".pdf")) else {}
+    fig.savefig(args.out, dpi=args.dpi, metadata=meta)
     print(f"wrote {args.out}")
 
 

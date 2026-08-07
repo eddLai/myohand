@@ -347,6 +347,14 @@ def main():
                 frames += 1
                 frame = cv2.flip(frame, 1)
                 res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            # ONE timestamp for the frame. The filter was being given
+            # time.time() at the top and the log a second time.time() taken
+            # after the whole UI had been drawn - milliseconds later - so a
+            # replay reconstructed the run with a dt the filter never saw,
+            # and drifted just far enough to flip gates near their threshold.
+            # 40% of frames failed the replay check on the first run that
+            # actually drove the hand.
+            t_frame = time.time()
             tgt = None
             raw_log = None
             feats_log = None
@@ -382,7 +390,7 @@ def main():
                     # becomes a command of its own.
                     raw[4] = raw[5] = hand_filter.HOLD
                 filt.set_deadband_deg(SETTINGS["deadband_deg"])
-                ema = filt.update(raw, time.time())
+                ema = filt.update(raw, t_frame)
                 if cal is not None:
                     grew = False
                     cal_labels[label.label] = cal_labels.get(label.label, 0) + 1
@@ -521,7 +529,7 @@ def main():
                 # walks away from it and never comes back. `was_sent` carries
                 # the transmitted/not distinction instead, and what went out is
                 # still recoverable as the value on the frames where it is 1.
-                runlog.frame(t=time.time(), seen=raw_log is not None,
+                runlog.frame(t=t_frame, seen=raw_log is not None,
                              raw=raw_log, sent=ema if raw_log is not None else None,
                              was_sent=just_sent,
                              mode="on" if use_filter else "off",

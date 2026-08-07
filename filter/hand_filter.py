@@ -184,11 +184,18 @@ def camera_gains():
     sys.path.insert(0, os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "camera")))
     import hand_mapping as hm
-    span = hm.T_MAX - hm.T_MIN
-    finger = span / abs(hm.CURL_CLOSED - hm.CURL_OPEN)
+    # Each axis's OWN output span over its OWN input window. Only the four
+    # fingers use the full scale; both thumb axes are mapped onto the travel
+    # they actually have, and taking the global span for them would report a
+    # gain several times the truth - which lands as a deadband several times
+    # too coarse on exactly the axes that need it most. thumb_bend went from
+    # 816 counts to 235 on 2026-08-07 when its travel was measured, so this
+    # is not hypothetical.
+    finger = (hm.T_MAX - hm.T_MIN) / abs(hm.CURL_CLOSED - hm.CURL_OPEN)
     return {
         **{f: finger for f in FINGERS},
-        "thumb_bend": span / abs(hm.THUMB_CLOSED - hm.THUMB_OPEN),
+        "thumb_bend": ((hm.BEND_MAX - hm.BEND_MIN)
+                       / abs(hm.THUMB_CLOSED - hm.THUMB_OPEN)),
         "thumb_rot": (hm.T_MAX - hm.ROT_MIN) / abs(hm.OPP_MAX - hm.OPP_MIN),
     }
 

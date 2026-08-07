@@ -230,3 +230,44 @@ for got, want, name in (
 
 if fail:
     print("DIRECTION FAILURE")
+
+
+# --- per-axis travel: the thumb axes do not span the finger scale --------
+#
+# Measured on the hand 2026-08-07 from eight teleop run logs. thumb_bend
+# reaches 1375 at the open end (commanded above 1500 and held ten seconds,
+# it sat at exactly 1375 drawing 0 mA) and 1123 at the closed end, where
+# commanding 1034 pinned it and ramped the current to 1397 mA. Before this
+# was measured the axis was driven over the fingers' full 816 counts, so
+# three quarters of the command range was outside the mechanism and the
+# bottom of it was stalling the motor.
+#
+# Asserted here rather than trusted, because the failure is silent: a
+# mapping that commands past a stop looks fine in every plot of the command
+# and only shows up as heat in the actuator.
+
+BEND_STOP_CLOSED, BEND_STOP_OPEN = 1123, 1375
+bad = 0
+for flexion in [hm.THUMB_OPEN - 20, hm.THUMB_OPEN, 40.0, 70.0,
+                hm.THUMB_CLOSED, hm.THUMB_CLOSED + 20]:
+    v = hm._scale(flexion, hm.THUMB_CLOSED, hm.THUMB_OPEN,
+                  hm.BEND_MIN, hm.BEND_MAX)
+    if not BEND_STOP_CLOSED <= v <= BEND_STOP_OPEN:
+        print(f"thumb_bend flexion {flexion:.0f} deg -> {v}, outside "
+              f"{BEND_STOP_CLOSED}..{BEND_STOP_OPEN}  FAIL")
+        bad += 1
+print(f"thumb_bend stays inside its measured travel "
+      f"({hm.BEND_MIN}..{hm.BEND_MAX} of {BEND_STOP_CLOSED}..{BEND_STOP_OPEN})"
+      f"  {'ok' if bad == 0 else 'FAIL'}")
+fail += bad
+
+clear = hm.BEND_MIN - BEND_STOP_CLOSED
+print(f"{'closed stop kept clear by ' + str(clear) + ' counts':38s} "
+      f"{'ok' if clear > 0 else 'FAIL - commands into the stall'}")
+fail += clear <= 0
+
+span = hm.BEND_MAX - hm.BEND_MIN
+finger_span = hm.T_MAX - hm.T_MIN
+print(f"{'thumb_bend span ' + str(span) + ' vs fingers ' + str(finger_span):38s} "
+      f"{'ok' if span < finger_span // 2 else 'FAIL - back on the full scale'}")
+fail += span >= finger_span // 2

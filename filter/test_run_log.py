@@ -229,8 +229,24 @@ with tempfile.TemporaryDirectory() as d:
               [w for w in plot_cmd.split() if w.endswith("frames.csv")][0])
           and "plot " in plot_cmd,
           "both the script and the data are absolute")
-    check("summarise needs no plotting library",
-          "matplotlib" not in open(run_log.__file__).read())
+    # Actually deny it the library rather than grepping the source for the
+    # word - the first version of this check failed the moment a comment
+    # explained why matplotlib is absent.
+    blocked = os.path.join(d, "blocked")
+    fly(blocked)
+    saved = sys.modules.get("matplotlib")
+    sys.modules["matplotlib"] = None          # any import of it now raises
+    try:
+        run_log.summarise(blocked)
+        ok = True
+    except Exception as e:                    # noqa: BLE001
+        ok, why = False, f"{type(e).__name__}: {e}"
+    finally:
+        if saved is None:
+            sys.modules.pop("matplotlib", None)
+        else:
+            sys.modules["matplotlib"] = saved
+    check("summarise still works with matplotlib made unimportable", ok)
 
     # ---- holds ---------------------------------------------------------
     held = fly(os.path.join(d, "held"), hold_thumb_from=150)

@@ -222,6 +222,21 @@ check("deadbands are one tolerance in degrees, scaled per axis",
 check("so one number is not three different physical tolerances",
       db["thumb_bend"] > db["pinky"])
 
+# The slider retunes this live and nothing else, which is the point: it is
+# monotonic, so turning it cannot land the filter in a strange regime.
+filt = hf.HandFilter(G, deg=1.5)
+wide, narrow = [], []
+for deg, into in ((4.0, wide), (0.5, narrow)):
+    f = hf.HandFilter(G)
+    f.set_deadband_deg(deg)
+    _, sends = stream(f, still)
+    into.append(sends)
+check("a wider deadband sends strictly less than a narrow one",
+      wide[0] < narrow[0], f"4.0 deg: {wide[0]} sends, 0.5 deg: {narrow[0]}")
+check("set_deadband_deg leaves the one-euro state alone",
+      filt.set_deadband_deg(2.0) is None
+      and filt._filters[0].x_hat is None)
+
 
 # ---- interface contract --------------------------------------------------
 

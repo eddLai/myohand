@@ -176,6 +176,38 @@ with tempfile.TemporaryDirectory() as d:
     check("the two tables are not the same numbers under another heading",
           [r[1] for r in act] != [r[1] for r in cmd],
           "commanded-vs-actual would be vacuous if they were")
+    # The 2026-08-07 run that provoked this: handd's slave had stopped
+    # consuming process data, so ANGLEACT never moved and no axis drew
+    # current - which reads identically to a mechanism that absorbed every
+    # command, and the summary duly reported 100% absorbed on all six axes
+    # as though it were a fact about the hand.
+    for name, applying, cur in (("stuck", False, 0), ("silent", None, 0)):
+        pth = os.path.join(d, name)
+        log = run_log.RunLog(pth, {
+            "started": name, "gains": {a: 6.04 for a in AXES},
+            "filter": {"mincutoff": hf.MINCUTOFF, "beta": hf.BETA,
+                       "dcutoff": hf.DCUTOFF, "deg": 1.5,
+                       "dt_max": hf.DT_MAX}})
+        fd = hf.HandFilter({a: 6.04 for a in AXES}, deg=1.5)
+        rd, lastd = random.Random(3), None
+        for k in range(300):
+            raw = [1500 + 200 * (k // 60 % 2) + rd.gauss(0, 11) for _ in AXES]
+            got = fd.update(raw, 1786097111.0 + k / 30.0)
+            if got is not None:
+                lastd = got
+            t = {"ang": [1500] * 6, "cur": [cur] * 6}
+            if applying is not None:
+                t["applying"] = applying
+            log.frame(t=1786097111.0 + k / 30.0, seen=True, raw=raw,
+                      sent=lastd, was_sent=bool(fd.changed), mode="on",
+                      trust=True, tele=t)
+        dt = open(os.path.join(log.close(), "summary.txt")).read()
+        check(f"a hand that executed nothing is called out, not scored ({name})",
+              "NOT APPLYING WHAT IT WAS SENT" in dt
+              and "NOT the mechanism absorbing" in dt)
+        check(f"and the commanded columns are still offered as valid ({name})",
+              "commanded columns above are still" in dt)
+
     no_tele = fly(os.path.join(d, "notele"), telemetry=False)
     check("and the section is absent when nothing was measured",
           "what the hand actually did"
@@ -185,8 +217,18 @@ with tempfile.TemporaryDirectory() as d:
     #
     # matplotlib must never be needed to finish a run: the KD240 has 1.9 GB
     # of RAM and barely fits MediaPipe.
-    check("the summary hands over a runnable plot command",
-          "measure_jitter.py plot" in text and "frames.csv" in text)
+    # Absolute on both halves. The first version printed a bare script name
+    # into a summary that is displayed wherever teleop was run from - which
+    # is teleop/, while measure_jitter lives in filter/ - so the command it
+    # offered failed with "No such file or directory" the first time it was
+    # copied out of a real run.
+    plot_cmd = text.split("-- to plot it --")[1]
+    check("the summary hands over a plot command that runs from anywhere",
+          "/measure_jitter.py" in plot_cmd
+          and os.path.isabs(
+              [w for w in plot_cmd.split() if w.endswith("frames.csv")][0])
+          and "plot " in plot_cmd,
+          "both the script and the data are absolute")
     check("summarise needs no plotting library",
           "matplotlib" not in open(run_log.__file__).read())
 

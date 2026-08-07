@@ -50,7 +50,17 @@ FINGERS = hf.FINGERS
 #: The raw columns are named exactly as measure_jitter writes them, so
 #: `measure_jitter analyse` and `plot` read a run log with no conversion.
 #: The rest is what a live run knows and a recording session does not.
-RUN_FIELDS = ([f"sent_{a}" for a in AXES] + ["sent", "mode"])
+#: `sent_*` is the FILTER'S OUTPUT for the frame, not what the caller
+#: happened to transmit - the replay check has to be able to reproduce it,
+#: and a caller's last-transmitted pose stops tracking the filter the
+#: moment it declines to send (AUTO off, sink busy, settle gate). `sent`
+#: carries transmitted-or-not instead, so what actually went out is still
+#: recoverable as the value on the frames where it is 1.
+#:
+#: `applying` is handd's own stuck detector. Without it, a run where the
+#: slave stopped consuming process data is indistinguishable from a
+#: mechanism that absorbed every command.
+RUN_FIELDS = ([f"sent_{a}" for a in AXES] + ["sent", "mode", "applying"])
 
 FIELDS = mj.MAP_FIELDS + mj.TELE_FIELDS + mj.GAIN_FIELDS + RUN_FIELDS
 
@@ -129,7 +139,9 @@ class RunLog:
         row += self._gain_row
         row += ([f"{v:.4f}" for v in sent] if sent is not None
                 else [""] * len(AXES))
-        row += [1 if was_sent else 0, mode]
+        row += [1 if was_sent else 0, mode,
+                "" if not tele or tele.get("applying") is None
+                else (1 if tele["applying"] else 0)]
         self.sends += 1 if was_sent else 0
         self._w.writerow(row)
         self._fh.flush()
@@ -291,8 +303,29 @@ def summarise(path, skip=0.0):
         idx = {id(r): k for k, r in enumerate(rows)}
         on_t = [on[idx[id(r)]] for r in tele]
         ang = [[float(r[f"ang_{x}"]) for x in AXES] for r in tele]
+        # A slave that has stopped consuming process data reads exactly like
+        # a mechanism that absorbed every command: no travel, no current,
+        # 100% absorbed. handd knows the difference and says so in `state`,
+        # so the one number that must not be reported as absorption is the
+        # one where nothing was being applied at all.
+        napp = sum(1 for r in tele if r.get("applying") == "0")
+        dead = all(_travel(ang, i) == 0 for i in range(len(AXES))) and all(
+            float(r[f"cur_{x}"]) == 0 for r in tele for x in AXES)
         a("")
         a(f"-- what the hand actually did ({len(tele)}/{len(rows)} frames) --")
+        if napp or dead:
+            a("   !! THE HAND WAS NOT APPLYING WHAT IT WAS SENT.")
+            if napp:
+                a(f"   handd reported not-applying on {napp}/{len(tele)}"
+                  f" frames.")
+            if dead:
+                a("   ANGLEACT never moved and no axis drew any current, while")
+                a("   poses were being commanded.")
+            a("   So 'absorbed' below is NOT the mechanism absorbing anything -")
+            a("   nothing was executed. This is a bus/daemon fault, not a")
+            a("   filter result, and the commanded columns above are still")
+            a("   valid while these are not.")
+            a("")
         a("   commanded is inferred from the raw stream; actual is ANGLEACT,")
         a("   measured. 'absorbed' is what the mechanism did not execute.")
         a("   Idle draws 0 mA on every axis (2026-08-07), so any current here")
@@ -308,7 +341,12 @@ def summarise(path, skip=0.0):
 
     a("")
     a("-- to plot it --")
-    a(f"   python3 measure_jitter.py plot {os.path.join(path, 'frames.csv')} \\")
+    # Absolute path to the script as well as to the data: this is printed
+    # where teleop was run from, which is teleop/, and measure_jitter lives
+    # in filter/. A command that only works from one directory is one the
+    # reader has to debug before they can use it.
+    a(f"   python3 {os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measure_jitter.py')} \\")
+    a(f"       plot {os.path.abspath(os.path.join(path, 'frames.csv'))} \\")
     a(f"       --axis {' '.join(FINGERS)} --skip 0")
     a("")
     return "\n".join(out) + "\n"

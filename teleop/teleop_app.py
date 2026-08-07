@@ -540,11 +540,25 @@ def main():
                     try:
                         st = sink._client.state()
                         if st.get("bus") == "up":
-                            tele = {"ang": st["ang"], "cur": st["cur"]}
+                            # `applying` is handd's own stuck detector. Without
+                            # it a run where the slave stopped consuming process
+                            # data looks exactly like a mechanism that absorbed
+                            # every command, and the summary would report 100%
+                            # absorbed as though that were about the hand.
+                            tele = {"ang": st["ang"], "cur": st["cur"],
+                                    "applying": st.get("applying")}
                     except Exception:                       # noqa: BLE001
                         pass    # telemetry is a bonus; never lose a frame for it
+                # `ema` is the filter's own output, which is what the replay
+                # check has to be able to reproduce. last_sent is not: it only
+                # advances on frames teleop actually transmitted, so with AUTO
+                # off - or before it is switched on - the filter's staircase
+                # walks away from it and never comes back. `was_sent` carries
+                # the transmitted/not distinction instead, and what went out is
+                # still recoverable as the value on the frames where it is 1.
                 runlog.frame(t=time.time(), seen=raw_log is not None,
-                             raw=raw_log, sent=last_sent, was_sent=just_sent,
+                             raw=raw_log, sent=ema if raw_log is not None else None,
+                             was_sent=just_sent,
                              mode="on" if use_filter else "off",
                              trust=trust, why=why, feats=feats_log, tele=tele)
 

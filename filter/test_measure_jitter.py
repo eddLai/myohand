@@ -254,14 +254,33 @@ def write_csv(path, n=120, with_tele=False):
             w.writerow(row)
 
 
+# ---- settling: the head of a recording is not noise ------------------------
+#
+# The real still.csv of 2026-08-07 opened with the operator arriving and
+# MediaPipe converging, which read as sd 17.3 counts on the index axis
+# against 6.3 for the rest of the run. Tuning against the inflated figure
+# buys an over-smoothed filter and pays for it in latency, so the
+# instrument has to show the transient and be able to drop it.
+
+_r2 = random.Random(9)
+loud_then_quiet = ([[1500 + _r2.gauss(0, 40) for _ in AXES] for _ in range(60)]
+                   + [[1500 + _r2.gauss(0, 4) for _ in AXES] for _ in range(240)])
+ts_lq = [k / 30.0 for k in range(300)]
+blocks = mj.settling(ts_lq, loud_then_quiet)
+check("settling shows a loud opening block against a quiet closing one",
+      max(blocks[0][1]) > 3 * max(blocks[-1][1]),
+      f"first {max(blocks[0][1]):.0f} vs last {max(blocks[-1][1]):.0f} counts sd")
+check("settling covers every frame in five blocks",
+      len(blocks) == 5 and blocks[-1][0][1] == ts_lq[-1])
+
 with tempfile.TemporaryDirectory() as d:
     plain = os.path.join(d, "plain.csv")
     tele = os.path.join(d, "tele.csv")
     write_csv(plain, with_tele=False)
     write_csv(tele, with_tele=True)
 
-    rows_p, _, _, _ = mj.load(plain)
-    rows_t, _, _, _ = mj.load(tele)
+    rows_p, _, _, _, _ = mj.load(plain)
+    rows_t, _, _, _, _ = mj.load(tele)
     check("a recording without --telemetry reports no telemetry",
           mj.telemetry(rows_p) is None)
     got = mj.telemetry(rows_t)
@@ -277,7 +296,7 @@ with tempfile.TemporaryDirectory() as d:
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
-                mj.analyse(argparse.Namespace(csv=path, deg=1.5))
+                mj.analyse(argparse.Namespace(csv=path, deg=1.5, skip=0.0))
             ok, why = want in buf.getvalue(), ""
         except Exception as e:                 # noqa: BLE001
             ok, why = False, f"{type(e).__name__}: {e}"
@@ -285,9 +304,23 @@ with tempfile.TemporaryDirectory() as d:
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        mj.analyse(argparse.Namespace(csv=plain, deg=1.5))
+        mj.analyse(argparse.Namespace(csv=plain, deg=1.5, skip=0.0))
     check("the idle-baseline section is absent when nothing recorded it",
           "nothing drove it" not in buf.getvalue())
+
+    kept_all, _, _, _, dropped0 = mj.load(plain, 0.0)
+    kept_1s, _, _, _, dropped1 = mj.load(plain, 1.0)
+    check("--skip drops exactly the frames inside the window",
+          dropped0 == 0 and dropped1 == 30
+          and len(kept_all) - len(kept_1s) == dropped1,
+          f"1.0 s of 30 FPS dropped {dropped1} frames")
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            mj.load(plain, 999.0)
+        ok = False
+    except SystemExit:
+        ok = True
+    check("--skip longer than the recording exits with a message", ok)
 
 
 print()

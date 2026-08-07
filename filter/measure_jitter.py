@@ -279,7 +279,7 @@ def plot(args):
         g, stamped = recorded_gains(rows, path)
         if args.gain:
             g = dict(g, **{a: args.gain[i] for i, a in enumerate(AXES)})
-        gain = g[args.axis]
+        gain = g[axis]
         trust = [r.get("trust") == "1" for r in rows]
         t0 = ts[0]
         ts = [t - t0 for t in ts]

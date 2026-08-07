@@ -6,11 +6,11 @@
 |---|---|---|
 | `emg/` | Myo 臂環擷取，靠 libemg | 可錄資料，還沒有分類器 |
 | `camera/` | MediaPipe 手部追蹤 -> 關節角度分解 (`hand_mapping.py`)、校正、mapping 測試 | 可動 |
-| `teleop/` | Webcam teleop app：儀表板 UI、SYNC/CALIBRATE/HAND 控制 | 可動 |
+| `teleop/` | Webcam teleop app：儀表板 UI、SYNC/CALIBRATE/HAND 控制。每次跑完在 `runs/` 留一份紀錄 | 可動 |
 | `hand_fw/` | RH56F1 的 EtherCAT 控制堆疊：C core (SOEM)、安全層、Python API + HTTP server + 常駐 daemon。操作說明在它的 README，技術細節在 vault | 可動 |
-| `filter/` | 送給手之前的命令平滑與遲滯：靜止時不要動，動起來不要鈍 | 開發中，目前只有量測工具，見其 README |
+| `filter/` | 送給手之前的命令平滑與遲滯：靜止時不要動，動起來不要鈍。已接進 teleop | 可動，參數待重調，見其 README |
 | `nn/` | EMG -> 姿態的網路 (labels 來自 `camera/hand_mapping.thumb_features`) | 規劃中，見其 README |
-| `pid/` | 對 ANGLEACT 回授做閉迴路關節控制 | 規劃中，見其 README |
+| `pid/` | 對 ANGLEACT 回授做閉迴路關節控制 | 擱置——2026-08-07 量到穩態誤差只有 1–2 counts，沒有東西給它修，見其 README |
 | `data/` | 已錄好的手勢資料集 | 見下 |
 | `libemg/` | submodule（LibEMG/libemg） | |
 
@@ -27,6 +27,11 @@ EMG 那半邊還沒有任何程式碼會去呼叫 `hand_fw/`，webcam teleop 也
 怎麼查、視窗上有哪些按鈕、校正怎麼跑、卡住了怎麼辦 —— 見
 [`teleop/README.md`](teleop/README.md)。第一次校正前先看
 [`nn/CALIBRATION.md`](nn/CALIBRATION.md)。
+
+teleop 每跑一次就在 `runs/<時間戳>/` 留下 `frames.csv`、`meta.json` 和
+`summary.txt`，退出時把 summary 印出來；`runs/` 已 gitignore。視窗裡按 `f`
+可以即時把濾波器移出路徑，還原成舊行為來當場對照——見
+[`filter/README.md`](filter/README.md)。
 
 `hand_ctl` / `hand_set` 的網卡來自 `$ECAT_IFACE`（預設 `eth0`），`handd` 用
 `--iface=`。網卡不叫 `eth0` 又忘了給，錯誤訊息會是 `need CAP_NET_RAW or root`，

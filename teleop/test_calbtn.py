@@ -39,6 +39,9 @@ class Cap:
     def release(self):
         self.released = True
 
+    def isOpened(self):     # noqa: N802 - matching cv2's name, not ours
+        return True
+
 
 opened = []
 

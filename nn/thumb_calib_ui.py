@@ -354,6 +354,11 @@ for i, (tag, zh, detail, chan, key_name, end) in enumerate([] if REPLAY else POS
 if not REPLAY:
     cap.release()
     cv2.destroyAllWindows()
+    # destroyAllWindows only queues the close; without the GUI loop running
+    # once more the window sits there as a dead rectangle over whatever
+    # launched us, for as long as the report below takes to print
+    for _ in range(4):
+        cv2.waitKey(1)
     if aborted:
         print("\n（中止 — 已錄到的仍會分析）")
     if not rows:

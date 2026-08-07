@@ -163,7 +163,17 @@ def run_calibration(device, open_camera, cap):
     except Exception as e:      # noqa: BLE001 - losing the camera is worse
         cal_note = f"could not run the calibration tool: {e}"
     print(f"calibration profile: {hm.ACTIVE_PROFILE or '(module defaults)'}")
-    return open_camera(device)
+    # the child only just let go of /dev/video*, and the first open after
+    # that can still come back closed. Without this the loop falls into the
+    # offline placeholder and waits out CAM_RETRY, so a clean handover
+    # looks to the operator like the camera broke.
+    for _ in range(20):
+        cap = open_camera(device)
+        if cap.isOpened():
+            return cap
+        cap.release()
+        time.sleep(0.1)
+    return cap
 
 
 def on_mouse(event, x, y, flags, param):

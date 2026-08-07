@@ -18,9 +18,14 @@ EMG 那半邊還沒有任何程式碼會去呼叫 `hand_fw/`，webcam teleop 也
 
 ## Quickstart
 
-    ./setup.sh                                     # root venv + SOEM + C binaries + caps（sudo 一次）
-    ECAT_IFACE=enp17s0 ./hand_fw/hand_ctl state     # 遙測，不會動
-    ./teleop/run_teleop.sh --iface=enp17s0          # webcam teleop 視窗（串進 handd）
+    ./setup.sh                                  # root venv + SOEM + C binaries + caps（sudo 一次）
+    ECAT_IFACE=eno1 ./hand_fw/hand_ctl state    # 遙測，不會動
+    ./teleop/run_teleop.sh --iface=eno1         # webcam teleop 視窗（串進 handd）
+
+⚠️ 網卡名每台機器不一樣，上面寫的是 `ntk112`（`enp17s0` 在那台是 `down`）。
+怎麼查、視窗上有哪些按鈕、校正怎麼跑、卡住了怎麼辦 —— 見
+[`teleop/README.md`](teleop/README.md)。第一次校正前先看
+[`nn/CALIBRATION.md`](nn/CALIBRATION.md)。
 
 `hand_ctl` / `hand_set` 的網卡來自 `$ECAT_IFACE`（預設 `eth0`），`handd` 用
 `--iface=`。網卡不叫 `eth0` 又忘了給，錯誤訊息會是 `need CAP_NET_RAW or root`，

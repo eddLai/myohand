@@ -200,6 +200,28 @@ out = filt.update([hf.HOLD] * 6, 0.0)
 check("a first frame that is all holds sends nothing",
       filt.changed is False)
 
+# Found on the hardware, 2026-08-07: this returned [None]*6 and the UI gauge
+# crashed indexing it. A partial pose that looks like a pose is worse than
+# no pose - callers index every axis, so there must be nothing to index.
+check("and returns None rather than a vector with holes in it", out is None)
+
+filt = hf.HandFilter(G)
+part = filt.update([1500, 1500, 1500, 1500, hf.HOLD, hf.HOLD], 0.0)
+check("a first frame holding only the thumb is still not a pose",
+      part is None, "the thumb axes have never been measured")
+after = filt.update([1500] * 6, 1 / 30.0)
+check("and it becomes one as soon as every axis has been seen",
+      after is not None and all(v is not None for v in after))
+
+seen_none = False
+f2 = hf.HandFilter(G)
+for k in range(200):
+    v = f2.update([1500 + r.gauss(0, 12) if i < 4 else hf.HOLD
+                   for i in range(6)], k / 30.0)
+    seen_none = seen_none or (v is not None and any(x is None for x in v))
+check("no output ever contains None, however long the hold lasts",
+      not seen_none)
+
 
 # ---- the parameters are the measured ones -------------------------------
 #

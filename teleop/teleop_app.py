@@ -349,6 +349,7 @@ def main():
                 res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             tgt = None
             raw_log = None
+            feats_log = None
 
             trust, why = True, ""
             if res and res.multi_hand_landmarks and res.multi_hand_world_landmarks:
@@ -359,8 +360,21 @@ def main():
                 label = res.multi_handedness[0].classification[0]
                 trust, why = hm.thumb_trust(res.multi_hand_landmarks[0].landmark,
                                             label.label, label.score)
-                raw = hm.pose_from_world_landmarks(res.multi_hand_world_landmarks[0].landmark)
+                world = res.multi_hand_world_landmarks[0].landmark
+                raw = hm.pose_from_world_landmarks(world)
                 raw_log = list(raw)     # before HOLD is written into it
+                if runlog is not None:
+                    # The input angles as well as the targets they became.
+                    # A calibration saved between a run and its analysis
+                    # re-scales every target - that happened on 2026-08-07 -
+                    # and these are what let an old run be re-mapped under
+                    # new windows instead of only re-read under its own.
+                    tf = hm.thumb_features(world)
+                    feats_log = {f"curl_{f}": hm.finger_curl(
+                                     world, hm.FINGER_CHAINS[f])
+                                 for f in hand_filter.FINGERS}
+                    feats_log["thumb_flexion"] = tf["flexion"]
+                    feats_log["opposition"] = tf["opposition"]
                 if not trust:
                     # MediaPipe is guessing at the thumb. Hand the filter a
                     # HOLD rather than a substitute value: a hold that is fed
@@ -497,7 +511,7 @@ def main():
                 runlog.frame(t=time.time(), seen=raw_log is not None,
                              raw=raw_log, sent=last_sent, was_sent=just_sent,
                              mode="on" if use_filter else "off",
-                             trust=trust, why=why, tele=tele)
+                             trust=trust, why=why, feats=feats_log, tele=tele)
 
             if args.max_frames and frames >= args.max_frames:
                 break

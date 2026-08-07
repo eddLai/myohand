@@ -272,19 +272,39 @@ def summarise(path, skip=0.0):
                 a("              above describe a filter other than the one")
                 a("              this run was flying, so do not trust them")
 
+    # The only MEASURED curve in this file.
+    #
+    # Both columns above are worked out afterwards from the raw stream. This
+    # one is not: ANGLEACT is where the hand reports it actually got to, so
+    # for whichever path was flying it closes the loop that the
+    # reconstruction cannot. It answers the question the commanded numbers
+    # only imply - how much of what we asked for the mechanism actually
+    # executed.
+    #
+    # Two things it is not. It is sampled once per camera frame while the
+    # hand applies its outputs every 18-27 ms, so it is not a timing
+    # reference. And it carries the RH56F1's own servo lag on top of ours,
+    # so the gap between commanded and actual is the whole chain's, not this
+    # filter's.
     tele = [r for r in rows if r.get(f"cur_{AXES[0]}")]
     if tele:
-        a("")
-        a(f"-- the hand while it was being driven ({len(tele)}/{len(rows)}"
-          f" frames) --")
-        a("   idle draws 0 on every axis (measured 2026-08-07), so this is")
-        a("   what the commands cost the actuator.")
-        a(f"   {'axis':<12}{'cur mean':>10}{'cur max':>9}{'ang travel':>12}")
+        idx = {id(r): k for k, r in enumerate(rows)}
+        on_t = [on[idx[id(r)]] for r in tele]
         ang = [[float(r[f"ang_{x}"]) for x in AXES] for r in tele]
+        a("")
+        a(f"-- what the hand actually did ({len(tele)}/{len(rows)} frames) --")
+        a("   commanded is inferred from the raw stream; actual is ANGLEACT,")
+        a("   measured. 'absorbed' is what the mechanism did not execute.")
+        a("   Idle draws 0 mA on every axis (2026-08-07), so any current here")
+        a("   is what these commands cost the actuator.")
+        a(f"   {'axis':<12}{'commanded':>11}{'actual':>9}{'absorbed':>10}"
+          f"{'cur mean':>10}{'cur max':>9}")
         for i, x in enumerate(AXES):
+            cmd, act = _travel(on_t, i), _travel(ang, i)
             cur = [abs(float(r[f"cur_{x}"])) for r in tele]
-            a(f"   {x:<12}{sum(cur)/len(cur):>10.1f}{max(cur):>9.0f}"
-              f"{_travel(ang, i):>12.0f}")
+            frac = f"{100*(1-act/cmd):.0f}%" if cmd else "-"
+            a(f"   {x:<12}{cmd:>11.0f}{act:>9.0f}{frac:>10}"
+              f"{sum(cur)/len(cur):>10.1f}{max(cur):>9.0f}")
 
     a("")
     a("-- to plot it --")

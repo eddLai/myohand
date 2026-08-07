@@ -27,8 +27,10 @@ hand_fw/soem_build/hand_set
 hand_fw/soem_build/hand_op*
 hand_fw/soem_build/hand_open*
 hand_fw/soem_build/hand_wake
-hand_fw/experiments/ecat_scan
-hand_fw/experiments/ecat_persistent_probe
+# experiments/ 底下沒有副檔名的一律是 .c 編出來的執行檔，原始碼照常進版控
+hand_fw/experiments/*
+!hand_fw/experiments/*/
+!hand_fw/experiments/*.*
 dist/
 # geometry pipeline (venv + vendor CAD stays out of the public repo)
 hand_fw/geometry/venv-geo/

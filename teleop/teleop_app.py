@@ -4,7 +4,7 @@
 UI (English):
   [SYNC] button (click)  - toggle AUTO sync to robot hand
   SPACE - send current pose once      A - toggle AUTO sync
-  C - toggle calibration              Q/ESC - quit
+  C - run the guided calibration      Q/ESC - quit
 
 The window opens even when the camera is missing: a dead camera leaves
 the panel on a placeholder and retries in the background, or switch
@@ -36,7 +36,7 @@ existed only because a pose was slow. It is --settle-frames now, and
 defaults to off when streaming, because waiting for the operator to hold
 still is the opposite of following them.
 """
-import argparse, json, os, signal, sys, time
+import argparse, json, os, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.normpath(os.path.join(
@@ -69,12 +69,11 @@ settle_frames = 5          # 0 disables the gate entirely
 auto_sync = False
 CAM_RETRY = 3.0            # seconds between reopen attempts while offline
 last_sent = None
-cal = None                 # {feature: [min, max]} while calibrating
-cal_note = ""
-cal_grew = 0.0             # when the range last got bigger
-cal_labels = None          # handedness votes while calibrating
-CAL_QUIET = 4.0            # save once no new extreme has shown up for this long
-CAL_NEED = {"curl_hi": 40, "opp": 40}   # the spread a usable window needs
+cal_note = ""              # what the last calibration attempt did
+cal_request = False        # a click asks; the loop owns the camera and acts
+CAL_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        os.pardir, "nn", "thumb_calib_ui.py")
+CAL_HOLD = 5.0             # seconds held per pose, passed through to the tool
 PARK = [hm.T_MAX] * 6      # every joint open - the pose to leave the hand in
 show_settings = False
 SET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teleop_settings.json")
@@ -116,42 +115,55 @@ def hit(rect, x, y):
     return x0 <= x <= x1 and y0 <= y <= y1
 
 
-def cal_missing(c):
-    """Which criteria the operator has not demonstrated yet."""
-    span = {k: v[1] - v[0] for k, v in (c or {}).items()}
-    return [k for k, need in CAL_NEED.items() if span.get(k, 0) < need]
-
-
 def toggle_calibration():
-    """Start recording the operator's range, or close it out and keep the
-    windows if they actually moved far enough to define one. Calibration
-    also closes itself: both hands are busy demonstrating the range, so
-    asking for a second click is asking for the one thing they cannot do."""
-    global cal, cal_note, cal_grew, cal_labels
-    if cal is None:
-        cal, cal_note, cal_grew = {}, "move through your full range", time.time()
-        cal_labels = {}
-        return
-    if cal_missing(cal):
-        cal, cal_note = None, "range too small - discarded"
-        return
-    # A new profile every time. The measured windows already in the file
-    # are data, not settings, and a stray click on a badly lit day must
-    # not be able to land on top of them.
-    data = {
-        "CURL_OPEN": round(cal["curl_lo"][0], 1),
-        "CURL_CLOSED": round(cal["curl_hi"][1], 1),
-        "THUMB_OPEN": round(cal["thumb"][0], 1),
-        "THUMB_CLOSED": round(cal["thumb"][1], 1),
-        "OPP_MIN": round(cal["opp"][0], 1),
-        "OPP_MAX": round(cal["opp"][1], 1),
-    }
-    if cal_labels:
-        # lock in whichever hand MediaPipe saw during the demonstration,
-        # so every later frame that disagrees is known to be a flip
-        data["HANDEDNESS"] = max(cal_labels, key=cal_labels.get)
-    name = hm.save_calibration(data)
-    cal, cal_note = None, f"saved as profile {name}"
+    """Ask for a calibration run. A flag and nothing else: the tool that
+    runs one needs the camera, and the camera belongs to the main loop."""
+    global cal_request
+    cal_request = True
+
+
+def run_calibration(device, open_camera, cap):
+    """Hand the camera to nn/thumb_calib_ui.py, then take it back.
+
+    This used to be measured here. A click opened a window on the
+    operator's free movement and kept its extremes, which is how the
+    2026-08-06 profile came to have a THUMB_CLOSED measured from the thumb
+    ROTATING rather than folding: in the five seconds meant as a curl,
+    opposition travelled 124 degrees and flexion 60. Nothing in this file
+    could have noticed. Free movement carries no claim about which joint
+    is moving, so there is nothing to check it against.
+
+    The tool does carry one. It names each pose on screen, holds it, and
+    refuses to save when a channel that should have stayed still did not.
+    Keeping a second copy of the pose list and that check here would give
+    the project two definitions of one procedure, and the two would drift;
+    the click hands the camera over instead and waits.
+
+    The cost is visible rather than hidden: this window stops for the
+    length of a calibration and a second one appears in front of it.
+    """
+    global cal_note
+    cap.release()               # one process at a time on /dev/video*
+    name = time.strftime("session-%Y%m%d-%H%M%S")
+    # what counts as success is a profile that was not there a moment ago.
+    # Asking only whether the name loads says yes to a name that already
+    # existed, and reports a refused calibration as a saved one.
+    before = set(hm.list_profiles()[1])
+    try:
+        r = subprocess.run([sys.executable, CAL_TOOL, str(device),
+                            str(CAL_HOLD), "--save=" + name])
+        if r.returncode != 0:
+            cal_note = f"calibration did not finish (exit {r.returncode})"
+        elif name in before or hm.load_calibration(name) is None:
+            # the tool ran and declined to save - a contaminated recording
+            # is refused there, and the reason is on the terminal
+            cal_note = "calibration refused - see the terminal"
+        else:
+            cal_note = f"saved as profile {name}"
+    except Exception as e:      # noqa: BLE001 - losing the camera is worse
+        cal_note = f"could not run the calibration tool: {e}"
+    print(f"calibration profile: {hm.ACTIVE_PROFILE or '(module defaults)'}")
+    return open_camera(device)
 
 
 def on_mouse(event, x, y, flags, param):
@@ -211,7 +223,7 @@ def build_parser():
 
 
 def main():
-    global auto_sync, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
+    global auto_sync, cal_request, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
     args = build_parser().parse_args()
 
     SETTLE_TOL = args.settle_tol
@@ -276,6 +288,12 @@ def main():
         t_start = time.time()
 
         while not stop:
+            if cal_request:
+                # serviced here, not in the click handler: this is the scope
+                # that holds the camera, and handing it over is the whole job
+                cal_request = False
+                cap = run_calibration(SETTINGS["device"], open_camera, cap)
+                opened_device, ema = SETTINGS["device"], None
             if SETTINGS["device"] != opened_device:     # follow the settings plate
                 cap.release()
                 cap = open_camera(SETTINGS["device"])
@@ -316,20 +334,6 @@ def main():
                 else:
                     w = SETTINGS["ema"] / 100.0
                     ema = [int(w * e + (1 - w) * r) for e, r in zip(ema, raw)]
-                if cal is not None:
-                    grew = False
-                    cal_labels[label.label] = cal_labels.get(label.label, 0) + 1
-                    feats = hm.raw_features(res.multi_hand_world_landmarks[0].landmark)
-                    if not trust:      # never calibrate windows against guesses
-                        feats = {k: v for k, v in feats.items()
-                                 if k not in ("thumb", "opp")}
-                    for k, v in feats.items():
-                        lo, hi = cal.get(k, (v, v))
-                        if v < lo - 0.5 or v > hi + 0.5:
-                            grew = True
-                        cal[k] = (min(lo, v), max(hi, v))
-                    if grew:
-                        cal_grew = time.time()
                 moved = max(abs(a - b) for a, b in zip(ema, raw))
                 quiet = quiet + 1 if moved < SETTLE_TOL else 0
                 tgt = ema[:]
@@ -338,40 +342,18 @@ def main():
             else:
                 quiet = 0
 
-            if cal is not None and not cal_missing(cal):
-                # never time out and discard: the range stays open until the
-                # operator has actually shown it, then settles on its own
-                if time.time() - cal_grew > CAL_QUIET:
-                    toggle_calibration()
             busy = sink.busy
             ui.draw_gauge(frame, tgt, busy, sink.actual)
             ui.draw_button(frame, ui.SYNC_BTN, auto_sync,
                            "SYNC ON" if auto_sync else "SYNC OFF")
-            ui.draw_button(frame, ui.CAL_BTN, cal is not None,
-                           "CALIBRATING" if cal is not None else "CALIBRATE", ui.VIOLET,
+            ui.draw_button(frame, ui.CAL_BTN, False, "CALIBRATE", ui.VIOLET,
                            enabled=not busy)
             ui.draw_button(frame, ui.PARK_BTN, False, "OPEN HAND", enabled=not busy)
             ui.draw_button(frame, ui.SET_BTN, show_settings, "SETTINGS", ui.VIOLET)
             if show_settings:
                 ui.draw_settings(frame, SETTINGS)
             elapsed = sink.elapsed()
-            if cal is not None:
-                missing = cal_missing(cal)
-                headline = "Calibrating"
-                if not missing:
-                    hint = (f"saving in {max(0.0, CAL_QUIET - (time.time() - cal_grew)):.0f} s - "
-                            "keep going if you have more range to show")
-                else:
-                    span = {k: v[1] - v[0] for k, v in cal.items()}
-                    need = ["fingers: open wide, then a full fist "
-                            f"({span.get('curl_hi', 0):.0f} of {CAL_NEED['curl_hi']} deg)"
-                            if "curl_hi" in missing else "",
-                            "thumb: splay it out, then sweep it across the palm "
-                            f"({span.get('opp', 0):.0f} of {CAL_NEED['opp']} deg)"
-                            if "opp" in missing else ""]
-                    hint = "   ".join(n for n in need if n)
-                tone = ui.VIOLET
-            elif busy:
+            if busy:
                 headline, hint, tone = "Hand moving", "mirroring the pose you held", ui.VIOLET
             elif not ok:
                 headline, hint, tone = ("Camera offline",

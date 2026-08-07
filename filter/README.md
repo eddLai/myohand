@@ -36,8 +36,12 @@
     # 手擺在鏡頭前不要動，20 秒
     python3 measure_jitter.py record --device=0 --seconds=20 -o still.csv
 
+    # daemon 有開的話加 --telemetry，順便記手自己的 ANGLEACT 和電流
+    python3 measure_jitter.py record --seconds=20 --telemetry -o still.csv
+
     # 之後隨便掃參數，不用再開鏡頭
     python3 measure_jitter.py analyse still.csv
+    python3 measure_jitter.py analyse still.csv --deg=1.0
 
 錄製和分析分開是刻意的：CSV 存的是**原始** mapping 輸出加上產生它的輸入角度，
 所以每種濾波、每個門檻都能事後在同一批 frame 上重掃。為了換一個 alpha 而重錄，
@@ -57,6 +61,30 @@
 `fingers` 欄單獨列出四指的部分，因為總量會被振幅最大的那一軸蓋過去，
 而那不是操作者抱怨的東西。
 
+### 濾波器和 gate 一起掃，不分開掃
+
+`filters x gates` 那張表同一列同時給兩種 gate 的分數，因為**兩者不能疊加**：
+濾波器把某一軸壓到它自己的門檻以下，逐軸 gate 就完全不送那一軸，但耦合 gate
+還是會在**別的軸**動的時候把它一起放行。合成資料上 `ema tau=0.1s` 的四指
+travel 在耦合 gate 是 452、逐軸是 38，十二倍差距；`one-euro fc=0.5 beta=0`
+是 41 對 **0**。只看其中一欄會挑錯參數。
+
+`--deg` 決定逐軸那半邊的門檻：一個角度容忍度，乘上各軸自己的 gain。
+
+`p2p_f` 是濾波後四指最大的峰對峰擺幅。`travel` 是路徑長度——對馬達耗損是對的
+代理量，對「操作者看到的晃動」不是。濾波器可以砍掉大量路徑長度而擺幅幾乎沒變。
+`p2p_f` 降不下來通常代表那是慢漂移，那是真的手在動，不該被濾掉。
+
+### `--telemetry`：手自己的底線
+
+錄製時**照樣不開 sink**，只是多跟 daemon 要 `state`（唯讀，不送 target），
+所以手一樣不會動。因此這段 telemetry 是**手閒置時的底線**，不是手對這些
+命令的反應——要看反應需要另外錄一段真的在驅動手的。兩個用途：
+
+- 命令雜訊如果低於手自己的 ANGLEACT 雜訊，那是手根本分辨不出來的量，
+  濾掉它買不到任何可觀察的東西。
+- 閒置電流是零點。之後量「抖動讓馬達做了多少功」時，要拿這個當對照組。
+
 ## 不屬於這一格的東西
 
 - **slew limit（速率上限）** 屬於 `hand_fw`，跟 `hand_safety.c` 同層。
@@ -74,8 +102,15 @@
 
 ## 待辦
 
-- [ ] 在實機錄一段 still.csv，取得真實的每軸雜訊數字
+- [ ] 在實機錄一段 still.csv（開 `--telemetry`），取得真實的每軸雜訊數字
 - [ ] 再錄一段「慢慢動」的，因為 travel 只評得出靜止表現，評不出延遲
+- [ ] 錄一段有掉幀的（手移出畫面再移回、遮擋）。one-euro 的
+      `alpha = 1/(1+tau/dt)` 在 dt 變大時趨近 1，等於**幾乎不濾**——
+      MediaPipe 重新偵測的那一瞬間姿態最不可靠，濾波卻最弱。
+      偵測乾淨連續的 still.csv 永遠照不出這件事。
+- [ ] 手端驅動對照：命令一個固定姿勢 hold 住、記電流，跟 `--telemetry`
+      的閒置電流比。這是「抖動到底讓馬達做了多少功」唯一誠實的量法，
+      也是這一格的正當性數字
 - [ ] `hand_filter.py`：逐軸遲滯 ＋ 吃 `dt` 的平滑，參數由上面兩份數據定
 - [ ] 接進 `teleop_app.py`，把內嵌的 EMA 和兩處重複的 deadband 收掉
 - [ ] `hand_sink.py` 的 `deadband` 退成防呆下限，不再是主要的抖動防線

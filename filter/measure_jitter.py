@@ -27,6 +27,18 @@ What the analysis answers, in order:
   3. What would per-axis gating, EMA and one-euro do instead - swept over
      a range of parameters, scored by commanded travel.
 
+Filters and gates are swept TOGETHER, because they do not compose: a
+filter that drops an axis below its own per-axis threshold silences it,
+while the coupled gate still releases that axis whenever another one
+moves. Scoring filters through today's gate and gates on unfiltered data
+would never score the pairing that is actually being built.
+
+With `record --telemetry` the recorder also logs what the hand reports on
+each frame. It opens no sink either way, so that telemetry is the hand
+sitting IDLE - a noise floor and a resting current to measure against, not
+the hand's answer to these commands. Watching it answer needs a run that
+actually drives it, which is a different recording.
+
 `travel` is the headline number: the total commanded movement summed over
 all six axes for the whole recording. The hand was still, so the correct
 answer is zero and anything above it is jitter being sent to a motor.
@@ -48,10 +60,20 @@ FINGERS = ("pinky", "ring", "middle", "index")
 #: what hand_sink.Sink.deadband is today, so the sweep always brackets it
 CURRENT_DEADBAND = 12
 
-FIELDS = (["t", "seen", "trust", "why"]
-          + [f"tgt_{a}" for a in AXES]
-          + [f"curl_{f}" for f in FINGERS]
-          + ["thumb_flexion", "opposition"])
+#: input tolerance the headline per-axis gate is derived from, in degrees
+SWEEP_DEG = 1.5
+
+MAP_FIELDS = (["t", "seen", "trust", "why"]
+              + [f"tgt_{a}" for a in AXES]
+              + [f"curl_{f}" for f in FINGERS]
+              + ["thumb_flexion", "opposition"])
+
+#: filled only with `record --telemetry`: what the hand reported on the same
+#: frame. Read-only - the recorder asks the daemon for `state` and never
+#: sends a target, so this does not weaken the promise that nothing moves.
+TELE_FIELDS = [f"ang_{a}" for a in AXES] + [f"cur_{a}" for a in AXES]
+
+FIELDS = MAP_FIELDS + TELE_FIELDS
 
 
 # ---- input-space gain ----------------------------------------------------
@@ -181,7 +203,59 @@ def gate_per_axis(rows, deadbands):
     return _result(sent, per_axis, {a: 0 for a in AXES})
 
 
+# ---- scoring a filter ----------------------------------------------------
+
+def as_rows(cols, n):
+    """Six per-axis columns back into n six-axis frames."""
+    return [[cols[i][k] for i in range(6)] for k in range(n)]
+
+
+def p2p_fingers(cols):
+    """Largest peak-to-peak excursion among the four fingers.
+
+    `travel` is a path length: it counts every wiggle, which makes it the
+    right proxy for motor duty and the wrong one for what the operator
+    sees. Amplitude is what looks wrong, and a filter can cut path length
+    hard while leaving the visible swing where it was. Fingers only, for
+    the same reason finger_travel exists.
+
+    On a still recording this also picks up slow drift - the operator's
+    hand sagging over twenty seconds - which no filter should remove and
+    every filter will therefore score alike on. A p2p that refuses to fall
+    while travel collapses means drift dominates, not that the filter
+    failed.
+    """
+    return max(max(cols[i]) - min(cols[i])
+               for i, a in enumerate(AXES) if a in FINGERS)
+
+
 # ---- recording -----------------------------------------------------------
+
+def open_telemetry():
+    """A read-only handd connection, or None with the reason printed.
+
+    `state` reads the input PDO image; it commands nothing. No target is
+    ever sent from this file, so the hand stays as still during a
+    telemetry recording as it does without one. A daemon that is not
+    running is not an error - the mapping half of the recording is still
+    worth having.
+    """
+    sys.path.insert(0, os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "hand_fw")))
+    try:
+        import hand_client
+        c = hand_client.HandClient()
+        c.connect()
+    except Exception as e:                     # noqa: BLE001 - any failure
+        print(f"telemetry unavailable ({e}) - recording the mapping only")
+        return None
+    if c.info.get("simulate"):
+        print("telemetry: handd is SIMULATED - these are not a real hand's"
+              " sensors")
+    else:
+        print("telemetry: reading ANGLEACT and current from handd")
+    return c
+
 
 def record(args):
     import cv2
@@ -199,6 +273,8 @@ def record(args):
     win = "measure_jitter - HOLD STILL"
     if not args.no_window:
         cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+
+    tele = open_telemetry() if args.telemetry else None
 
     out = open(args.out, "w", newline="")
     w = csv.writer(out)
@@ -219,7 +295,7 @@ def record(args):
             frame = cv2.flip(frame, 1)
             res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             n += 1
-            row = [f"{t:.4f}", 0, 0, ""] + [""] * (len(FIELDS) - 4)
+            row = [f"{t:.4f}", 0, 0, ""] + [""] * (len(MAP_FIELDS) - 4)
             if res.multi_hand_landmarks and res.multi_hand_world_landmarks:
                 world = res.multi_hand_world_landmarks[0].landmark
                 image = res.multi_hand_landmarks[0].landmark
@@ -233,7 +309,16 @@ def record(args):
                        + [f"{c:.3f}" for c in curls]
                        + [f"{tf['flexion']:.3f}", f"{tf['opposition']:.3f}"])
                 seen += 1
-            w.writerow(row)
+            tele_row = [""] * len(TELE_FIELDS)
+            if tele is not None:
+                try:
+                    st = tele.state()
+                    if st.get("bus") == "up":
+                        tele_row = ([str(v) for v in st["ang"]]
+                                    + [str(v) for v in st["cur"]])
+                except Exception:              # noqa: BLE001
+                    pass    # a telemetry gap must not end a 20 s recording
+            w.writerow(row + tele_row)
             if not args.no_window:
                 left = args.seconds - t
                 cv2.putText(frame, f"HOLD STILL  {left:4.1f}s",
@@ -248,6 +333,8 @@ def record(args):
     finally:
         cap.release()
         out.close()
+        if tele is not None:
+            tele.close()
         if not args.no_window:
             cv2.destroyAllWindows()
 
@@ -268,6 +355,28 @@ def load(path):
     tgts = [[float(r[f"tgt_{a}"]) for a in AXES] for r in rows]
     dts = [max(1e-3, ts[i] - ts[i - 1]) if i else 0.033 for i in range(len(ts))]
     return rows, ts, dts, tgts
+
+
+def telemetry(rows):
+    """Per-axis (ANGLEACT, current) for the frames that carry it, or None.
+
+    Present only if the recording was made with --telemetry, and blank on
+    any frame where the daemon's bus was down, so the frames are counted
+    rather than assumed.
+    """
+    key = f"ang_{AXES[0]}"
+    if not rows or key not in rows[0]:
+        return None
+    ang, cur = [], []
+    for r in rows:
+        if not r.get(key):
+            continue
+        try:
+            ang.append([float(r[f"ang_{a}"]) for a in AXES])
+            cur.append([float(r[f"cur_{a}"]) for a in AXES])
+        except (KeyError, ValueError):
+            continue
+    return (ang, cur) if ang else None
 
 
 def stats(col):
@@ -304,6 +413,35 @@ def analyse(args):
               f"{g[a]:8.1f}{dmean:10.1f}")
     print("  sd/p2p/|dframe| are ANGLEACT counts; sd(deg) is the same noise"
           " back in input degrees")
+
+    tele = telemetry(rows)
+    if tele:
+        ang, cur = tele
+        print(f"\n-- the hand while nothing drove it ({len(ang)}/{n} frames"
+              " carry telemetry) --")
+        print("  Recording opens no sink, so this is the hand sitting idle,"
+              " not the hand\n  answering these commands. Two things it is"
+              " for: a command jitter below\n  the hand's own ANGLEACT noise"
+              " is below what the hand can even resolve,\n  and this current"
+              " is the zero line a driven run gets compared against.")
+        print(f"{'axis':<12}{'cmd sd':>9}{'ang sd':>9}{'ang p2p':>9}"
+              f"{'cur mean':>10}{'cur max':>9}")
+        for i, a in enumerate(AXES):
+            _, cmd_sd, _ = stats([t[i] for t in tgts])
+            _, a_sd, a_p2p = stats([v[i] for v in ang])
+            cm = [abs(v[i]) for v in cur]
+            print(f"{a:<12}{cmd_sd:>9.1f}{a_sd:>9.1f}{a_p2p:>9.0f}"
+                  f"{sum(cm)/len(cm):>10.1f}{max(cm):>9.0f}")
+        louder = [a for i, a in enumerate(AXES)
+                  if stats([t[i] for t in tgts])[1]
+                  <= stats([v[i] for v in ang])[1]]
+        if louder:
+            print("  at or below the hand's own sensor noise: "
+                  + ", ".join(louder)
+                  + "\n  - filtering those buys nothing observable")
+        print("  a hand nobody is commanding should draw no current; whatever"
+              " is here is\n  the resting draw, and the number a jitter run"
+              " has to be measured against")
 
     print("\n-- would the current gate fire? --")
     cur = gate_coupled(tgts, CURRENT_DEADBAND)
@@ -343,26 +481,44 @@ def analyse(args):
         print(f"{deg:>6.1f}  " + "".join(f"{dbs[a]:>11.0f}" for a in AXES)
               + f"{p['sent']:>8}{p['travel']:>10.0f}")
 
-    print("\n-- filters, scored on travel through today's gate --")
-    print("  travel with no filter at all is the first row's baseline")
-    print(f"{'filter':<28}{'sent':>8}{'travel':>10}{'vs raw':>9}")
-    base = gate_coupled(tgts, CURRENT_DEADBAND)["travel"]
-    print(f"{'raw (no filter)':<28}{cur['sent']:>8}{base:>10.0f}{'100%':>9}")
+    print("\n-- filters x gates --")
+    print("  The design on the table is a filter feeding a PER-AXIS gate, so"
+          "\n  the two have to be scored together. They do not compose: a"
+          " filter that\n  drops one axis below its own threshold sends"
+          " nothing on it, while the\n  coupled gate still releases that axis"
+          " whenever another one moves.\n  Reading either column alone"
+          " predicts the wrong thing.")
+    dbs = {a: args.deg * g[a] for a in AXES}
+    print(f"\n  per-axis thresholds, {args.deg} deg scaled by each axis's"
+          " gain: "
+          + ", ".join(f"{a} {dbs[a]:.0f}" for a in AXES))
+    print(f"\n{'':<26}{'--- coupled, db=' + str(CURRENT_DEADBAND) + ' ---':^25}"
+          f"{'--- per-axis ---':^26}{'':>8}")
+    print(f"{'filter':<26}{'sent':>7}{'travel':>9}{'fingers':>9}"
+          f"{'sent':>8}{'travel':>9}{'fingers':>9}{'p2p_f':>8}")
 
     def score(name, cols):
-        filtered = [[cols[i][k] for i in range(6)] for k in range(n)]
-        r = gate_coupled(filtered, CURRENT_DEADBAND)
-        pct = 100.0 * r["travel"] / base if base else 0.0
-        print(f"{name:<28}{r['sent']:>8}{r['travel']:>10.0f}{pct:>8.0f}%")
+        f = as_rows(cols, n)
+        c = gate_coupled(f, CURRENT_DEADBAND)
+        p = gate_per_axis(f, dbs)
+        print(f"{name:<26}{c['sent']:>7}{c['travel']:>9.0f}"
+              f"{c['finger_travel']:>9.0f}{p['sent']:>8}{p['travel']:>9.0f}"
+              f"{p['finger_travel']:>9.0f}{p2p_fingers(cols):>8.0f}")
 
+    raw_cols = [[t[i] for t in tgts] for i in range(6)]
+    score("raw (no filter)", raw_cols)
     for tau in (0.05, 0.1, 0.2, 0.4):
-        score(f"ema tau={tau}s",
-              [ema([t[i] for t in tgts], dts, tau) for i in range(6)])
+        score(f"ema tau={tau}s", [ema(c, dts, tau) for c in raw_cols])
     for mc in (0.5, 1.0, 2.0):
         for beta in (0.0, 0.005, 0.02):
-            score(f"one-euro fc={mc} beta={beta}",
-                  [one_euro([t[i] for t in tgts], dts, mc, beta)
-                   for i in range(6)])
+            score(f"one-euro fc={mc} b={beta}",
+                  [one_euro(c, dts, mc, beta) for c in raw_cols])
+    print("\n  p2p_f is the largest peak-to-peak swing among the four fingers"
+          " AFTER\n  filtering: travel is a path length and amplitude is what"
+          " the operator\n  sees, and a filter can cut one without the other."
+          " A p2p_f that will not\n  fall while travel collapses is slow"
+          " drift, which is real hand movement\n  and not the filter's to"
+          " remove.")
     print("\n  a filter that scores low on travel but was measured only on a"
           "\n  still hand says nothing about lag - that needs a moving"
           "\n  recording, which is the next measurement, not this one.\n")
@@ -379,11 +535,18 @@ def main():
     rec.add_argument("--height", type=int, default=480)
     rec.add_argument("--no-window", action="store_true",
                      help="no preview - the operator gets no feedback either")
+    rec.add_argument("--telemetry", action="store_true",
+                     help="also log the hand's ANGLEACT and current from "
+                          "handd. Read-only: no target is ever sent, so the "
+                          "hand stays as still as it does without this")
     rec.add_argument("-o", "--out", default="still.csv")
     rec.set_defaults(fn=record)
 
     an = sub.add_parser("analyse", help="report noise and sweep thresholds")
     an.add_argument("csv")
+    an.add_argument("--deg", type=float, default=SWEEP_DEG,
+                    help="input tolerance the per-axis gate column is built "
+                         f"from, in degrees (default {SWEEP_DEG})")
     an.set_defaults(fn=analyse)
 
     args = ap.parse_args()

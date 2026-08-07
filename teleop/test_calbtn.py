@@ -43,6 +43,28 @@ class Cap:
         return True
 
 
+sent = []
+
+
+class Sink:
+    """Records the poses run_calibration hands it."""
+
+    name, busy, deadband = "stub", False, 0
+
+    def send(self, tgt, stamps=None):
+        sent.append(list(tgt))
+
+
+class DeadSink:
+    """A sink that has lost the hand. Parking is a courtesy; a calibration
+    must still happen, and the camera must still come back."""
+
+    name, busy, deadband = "dead", False, 0
+
+    def send(self, tgt, stamps=None):
+        raise RuntimeError("no handd on /tmp/inspire_hand.sock")
+
+
 opened = []
 
 
@@ -51,13 +73,17 @@ def open_camera(device):
     return Cap()
 
 
-def run_with(stub):
-    del opened[:]
+def run_with(stub, sink=None):
+    del opened[:], sent[:]
     ta.subprocess.run = stub
+    ta.sink = sink or Sink()
+    ta.last_sent = [1] * 6            # stale, as it is after a calibration
+    ta.auto_sync = False              # the operator has not clicked SYNC
     cap = Cap()
     back = ta.run_calibration(0, open_camera, cap)
     assert cap.released, "the old capture was not released"
     assert back is not None and opened == [0], "the camera was not reopened"
+    assert ta.last_sent is None, "a stale target survived; the deadband will "                                 "swallow the first pose after calibrating"
     return ta.cal_note
 
 
@@ -89,10 +115,20 @@ def stub_saves(argv, **kw):
 before = hm.ACTIVE_PROFILE
 check("saved -> note names the profile", run_with(stub_saves), "saved as profile")
 check("saved -> parent loaded it", hm.ACTIVE_PROFILE or "", saved["name"])
+print("  %-42s %s" % ("saved -> sync comes back on",
+                      "ok" if ta.auto_sync else "FAIL  auto_sync stayed off"))
+if not ta.auto_sync:
+    fails.append("sync after save")
 
 # 2. the tool ran and declined to save (a contaminated recording)
 check("refused -> note says so", run_with(lambda a, **k: R(0)),
       "calibration refused")
+# a refusal must not start the hand moving: nothing was demonstrated, so
+# there is nothing the operator has agreed to drive it with
+print("  %-42s %s" % ("refused -> sync stays off",
+                      "ok" if not ta.auto_sync else "FAIL  auto_sync turned on"))
+if ta.auto_sync:
+    fails.append("sync after refusal")
 
 # 3. the tool exited nonzero (aborted with q, or crashed)
 check("nonzero -> note carries the code", run_with(lambda a, **k: R(3)),
@@ -106,6 +142,17 @@ def stub_missing(argv, **kw):
 
 check("unlaunchable -> note explains", run_with(stub_missing),
       "could not run the calibration tool")
+
+check("the hand is opened before posing", run_with(lambda a, **k: R(0)),
+      "calibration refused")
+print("  %-42s %s" % ("PARK was the pose sent",
+                      "ok" if sent == [ta.PARK] else "FAIL  %r" % sent))
+if sent != [ta.PARK]:
+    fails.append("PARK sent")
+
+# a sink with no hand behind it must not cost the operator the camera
+check("dead sink -> calibration still runs",
+      run_with(lambda a, **k: R(0), sink=DeadSink()), "calibration refused")
 
 ta.subprocess.run = subprocess.run
 

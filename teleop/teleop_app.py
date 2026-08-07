@@ -142,7 +142,20 @@ def run_calibration(device, open_camera, cap):
     The cost is visible rather than hidden: this window stops for the
     length of a calibration and a second one appears in front of it.
     """
-    global cal_note
+    global auto_sync, cal_note, last_sent
+    # Nobody drives the hand for the next minute, and the operator needs
+    # both hands to pose. Whatever it was gripping, it should not be left
+    # gripping it unattended.
+    try:
+        send_pose(PARK)
+    except Exception as e:      # noqa: BLE001 - parking is a courtesy, and a
+        # sink that cannot take it is no reason to refuse a calibration
+        print(f"could not open the hand before calibrating: {e}", file=sys.stderr)
+    # forget where it was told to go: the deadband compares the next
+    # target against last_sent, so a stale one from before the calibration
+    # can swallow the first target after it. The hand then sits still while
+    # SYNC reads ON, which looks like the sync broke.
+    last_sent = None
     cap.release()               # one process at a time on /dev/video*
     name = time.strftime("session-%Y%m%d-%H%M%S")
     # what counts as success is a profile that was not there a moment ago.
@@ -160,6 +173,12 @@ def run_calibration(device, open_camera, cap):
             cal_note = "calibration refused - see the terminal"
         else:
             cal_note = f"saved as profile {name}"
+            # A window is measured in order to be used, and the operator is
+            # standing in front of the camera having just demonstrated it.
+            # Making them find SYNC before the hand moves again reads as the
+            # calibration not having taken. The hand was parked open on the
+            # way in, so what it resumes from is known.
+            auto_sync = True
     except Exception as e:      # noqa: BLE001 - losing the camera is worse
         cal_note = f"could not run the calibration tool: {e}"
     print(f"calibration profile: {hm.ACTIVE_PROFILE or '(module defaults)'}")

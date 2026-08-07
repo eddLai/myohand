@@ -374,8 +374,12 @@ if not REPLAY:
     # destroyAllWindows only queues the close; without the GUI loop running
     # once more the window sits there as a dead rectangle over whatever
     # launched us, for as long as the report below takes to print
-    for _ in range(4):
-        cv2.waitKey(1)
+    # destroyAllWindows only queues the close. One waitKey is not always
+    # enough for the window manager to retire the frame, and a dead
+    # rectangle sitting over whatever launched us reads as a hang at the
+    # exact moment the operator is waiting to see whether it worked.
+    for _ in range(10):
+        cv2.waitKey(30)
     if aborted:
         print("\n（中止 — 已錄到的仍會分析）")
     if not rows:

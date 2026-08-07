@@ -44,16 +44,23 @@ LABEL_SURE = 0.85          # handedness score under this means mid-flip
 # of 2026-08-06: T_MIN was 300 on the 0..2000 scale this file used to
 # assume, carried to the position it named (890 + 300*960/2000).
 T_MIN, T_MAX = 1034, hand_scale.TARGET_MAX
-# ROT_MIN was 700 pre-correction and is carried the same way (1226), which
-# errs toward leaving the thumb further clear. A 2026-08-05 on-hand test
-# (see git history) measured the palm-ward hard stop directly at ANGLEACT
-# 600 and back-converted it to "target ~300" on the old scale - that is a
-# second, more direct measurement of the same stop that predates the
-# scale correction and has not been reconciled with it. Whoever can stand
-# next to the hand again should decide between 1226 (safe, arithmetic)
-# and something nearer 600 (measured, but on an axis whose own travel
-# limits are not otherwise characterised - see hand_fw/hand_safety.h).
-ROT_MIN = 1226
+# ROT_MIN was 700 pre-correction, carried arithmetically to 1226, and the
+# comment here used to ask whoever could stand next to the hand to choose
+# between that and the ANGLEACT 600 a 2026-08-05 test measured directly.
+# Someone did, on 2026-08-07: nn/rot_floor_probe.py stepped the axis down
+# with the fingers open and every step arrived, 1226 through 890, drawing
+# 0-54 of current against a STALL_CUR of 400, with no stall, no guard
+# intervention, and the least current of the run at the bottom. The axis
+# is not against anything at 890 - hand_scale simply stops there - so the
+# floor is the scale's, not the mechanism's, and the two measurements were
+# never in conflict. Held at 1226 teleop was commanding 65% of the sweep
+# and an operator saw the thumb oppose only as far as the index; the full
+# sweep reaches the middle finger. It reaches no further at any setting:
+# a human thumb touches the pinky using CMC flexion, which this axis does
+# not have, so that gesture is out of the mechanism's reach and not a
+# calibration problem. The axis parks about 13 counts open of target
+# throughout, steadily - following error, not travel lost.
+ROT_MIN = hand_scale.TARGET_MIN
 
 # The scale itself lives in hand_scale (mirroring hand_safety.h). Nothing
 # here recomputes it, so what a target number means is answered in one

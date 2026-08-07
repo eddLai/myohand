@@ -39,7 +39,7 @@ replay check  matches what was sent: 788/788 frames identical, worst 0.0 counts
 -- to plot it --
    /home/ntk/myohand/venv/bin/python3 \
        /home/ntk/myohand-feat-filter-stage/filter/measure_jitter.py \
-       plot /home/ntk/myohand-feat-filter-stage/runs/2026-08-07T20-25-20/frames.csv \
-       --axis pinky ring middle index --skip 0 \
-       -o /home/ntk/myohand-feat-filter-stage/runs/2026-08-07T20-25-20/plot.svg
+       plot /home/ntk/myohand-feat-filter-stage/runs/2026-08-07T20-25-20_slow_open_and_close/frames.csv \
+       --axis pinky ring middle index thumb_bend thumb_rot --skip 0 \
+       -o /home/ntk/myohand-feat-filter-stage/runs/2026-08-07T20-25-20_slow_open_and_close/plot.svg
 

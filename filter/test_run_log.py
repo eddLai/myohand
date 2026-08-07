@@ -137,18 +137,48 @@ with tempfile.TemporaryDirectory() as d:
           "filter OFF" in text and "filter ON" in text)
     check("and labels the OFF column as reconstructed rather than measured",
           "RECONSTRUCTED" in text)
-    check("filter ON commands less travel than the reconstructed OFF",
-          all(float(ln.split()[1]) > float(ln.split()[2])
-              for ln in text.splitlines()
-              if ln.strip().startswith(tuple(AXES))
-              and len(ln.split()) >= 3 and ln.split()[1].isdigit()))
+    def table(txt, heading):
+        """The axis rows of one named section, not of every section.
 
-    # ---- telemetry -----------------------------------------------------
-    check("driven telemetry is summarised when it was recorded",
-          "while it was being driven" in text)
+        There is more than one axis-keyed table in the summary now, and a
+        parser that just matches leading axis names silently reads columns
+        out of whichever one it hits first.
+        """
+        lines, on, rows_ = txt.splitlines(), False, []
+        for ln in lines:
+            if heading in ln:
+                on = True
+                continue
+            if on and ln.startswith("-- "):
+                break
+            if on and ln.strip().startswith(tuple(AXES)):
+                rows_.append(ln.split())
+        return rows_
+
+    cmd = table(text, "commanded travel")
+    check("the commanded table covers all six axes", len(cmd) == 6,
+          f"{len(cmd)} rows")
+    check("filter ON commands less travel than the reconstructed OFF",
+          all(float(c[1]) > float(c[2]) for c in cmd))
+
+    # ---- the measured curve --------------------------------------------
+    #
+    # Everything else in the summary is worked out from the raw stream.
+    # ANGLEACT is the one column that was actually observed, so it is the
+    # only thing that can say how much of what was commanded the mechanism
+    # really executed.
+    check("what the hand actually did is reported when telemetry was recorded",
+          "what the hand actually did" in text)
+    act = table(text, "what the hand actually did")
+    check("and it sets measured actual against inferred commanded",
+          len(act) == 6 and all(len(r) >= 4 for r in act)
+          and "commanded" in text and "absorbed" in text)
+    check("the two tables are not the same numbers under another heading",
+          [r[1] for r in act] != [r[1] for r in cmd],
+          "commanded-vs-actual would be vacuous if they were")
     no_tele = fly(os.path.join(d, "notele"), telemetry=False)
-    check("and the section is absent when it was not",
-          "while it was being driven"
+    check("and the section is absent when nothing was measured",
+          "what the hand actually did"
           not in open(os.path.join(no_tele, "summary.txt")).read())
 
     # ---- the plot command is offered, not run --------------------------

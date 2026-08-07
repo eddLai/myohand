@@ -9,8 +9,15 @@ counts travel wrong, a gain table that has drifted from the mapping it
 claims to read, and above all a filter whose behaviour depends on the
 frame rate it happened to be measured at.
 """
+import argparse
+import contextlib
+import csv
+import io
 import math
+import os
+import random
 import sys
+import tempfile
 
 import measure_jitter as mj
 import hand_mapping as hm
@@ -30,7 +37,6 @@ def const(v, n=200):
 
 
 def noisy(sd_per_axis, n=600, seed=3):
-    import random
     r = random.Random(seed)
     return [[1500 + r.gauss(0, sd_per_axis[i]) for i in range(6)]
             for _ in range(n)]
@@ -168,6 +174,120 @@ check("one-euro holds a constant signal exactly",
 check("no filter overshoots the input range",
       max(mj.one_euro([r[0] for r in still], dts, 1.0, 0.02))
       <= max(r[0] for r in still) + 1e-6)
+
+
+# ---- amplitude is not path length ----------------------------------------
+#
+# travel counts every wiggle; p2p_f measures the swing. Reporting only the
+# first lets a filter claim a win it did not get, so the instrument reports
+# both and these are the two ways they disagree.
+
+def cols_of(rows):
+    return [[r[i] for r in rows] for i in range(6)]
+
+
+flat_fingers = [[1500, 1500, 1500, 1500, 1500, 1500 + 400 * (k % 2)]
+                for k in range(50)]
+check("p2p_f ignores the thumb axes, like finger_travel does",
+      mj.p2p_fingers(cols_of(flat_fingers)) == 0,
+      "a thumb swinging 400 counts is not a finger moving")
+
+# Drift plus noise on one finger: filtering kills the noise, and the drift
+# is real hand movement that must survive it. Travel collapses; the swing
+# the operator sees does not. Reporting travel alone would read that as a
+# filter that fixed the problem.
+_r = random.Random(5)
+drift = [[1500 + k + _r.gauss(0, 5)] + [1500] * 5 for k in range(120)]
+d_raw = cols_of(drift)
+d_filt = [mj.ema(c, [1 / 30.0] * 120, 0.3) for c in d_raw]
+gd = mj.gains()
+t_raw = mj.gate_per_axis(drift, {a: 1.5 * gd[a] for a in AXES})["travel"]
+t_filt = mj.gate_per_axis(mj.as_rows(d_filt, 120),
+                          {a: 1.5 * gd[a] for a in AXES})["travel"]
+p_raw, p_filt = mj.p2p_fingers(d_raw), mj.p2p_fingers(d_filt)
+check("travel and p2p_f disagree: a filter cuts the path, not the swing",
+      t_filt < 0.6 * t_raw and p_filt > 0.7 * p_raw,
+      f"travel {t_raw:.0f} -> {t_filt:.0f}, p2p_f {p_raw:.0f} -> {p_filt:.0f}")
+
+
+# ---- filters and gates do not compose -------------------------------------
+#
+# The reason the sweep crosses them instead of scoring filters through the
+# old gate and gates on raw data. Filtering a quiet axis does not stop the
+# coupled gate from releasing it: that is decided by a different axis.
+
+one_loud = noisy([1, 1, 1, 1, 1, 20])
+dts_l = [1 / 30.0] * len(one_loud)
+filt = [mj.one_euro([r[i] for r in one_loud], dts_l, 1.0, 0.005)
+        for i in range(6)]
+frows = mj.as_rows(filt, len(one_loud))
+g = mj.gains()
+dbs = {a: 1.5 * g[a] for a in AXES}
+fc = mj.gate_coupled(frows, 12)
+fp = mj.gate_per_axis(frows, dbs)
+check("the same filtered signal scores differently under the two gates",
+      fc["finger_travel"] > 10 * max(fp["finger_travel"], 1e-9),
+      f"coupled {fc['finger_travel']:.0f} vs per-axis "
+      f"{fp['finger_travel']:.0f} counts of finger travel")
+
+
+# ---- telemetry column handling --------------------------------------------
+
+def write_csv(path, n=120, with_tele=False):
+    r = random.Random(11)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(mj.FIELDS)
+        for k in range(n):
+            tgt = [1500 + r.gauss(0, 4) for _ in AXES]
+            row = ([f"{k / 30.0:.4f}", 1, 1, ""]
+                   + [f"{v:.1f}" for v in tgt]
+                   + [f"{r.gauss(80, 1):.3f}" for _ in mj.FINGERS]
+                   + [f"{r.gauss(60, 1):.3f}", f"{r.gauss(45, 1):.3f}"])
+            if with_tele:
+                # one gap, so the "carry telemetry" count has to be real
+                row += ([""] * 12 if k == 5 else
+                        [f"{1500 + r.gauss(0, 2):.0f}" for _ in AXES]
+                        + [f"{abs(r.gauss(0, 3)):.0f}" for _ in AXES])
+            else:
+                row += [""] * 12
+            w.writerow(row)
+
+
+with tempfile.TemporaryDirectory() as d:
+    plain = os.path.join(d, "plain.csv")
+    tele = os.path.join(d, "tele.csv")
+    write_csv(plain, with_tele=False)
+    write_csv(tele, with_tele=True)
+
+    rows_p, _, _, _ = mj.load(plain)
+    rows_t, _, _, _ = mj.load(tele)
+    check("a recording without --telemetry reports no telemetry",
+          mj.telemetry(rows_p) is None)
+    got = mj.telemetry(rows_t)
+    check("a recording with --telemetry parses both ANGLEACT and current",
+          got is not None and len(got) == 2 and len(got[0][0]) == 6)
+    check("and drops the frames whose telemetry is blank rather than faking",
+          len(got[0]) == len(rows_t) - 1,
+          f"{len(got[0])} of {len(rows_t)} frames carried it")
+
+    # The whole print path had never been executed before this test existed.
+    for name, path, want in (("without telemetry", plain, "filters x gates"),
+                             ("with telemetry", tele, "nothing drove it")):
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                mj.analyse(argparse.Namespace(csv=path, deg=1.5))
+            ok, why = want in buf.getvalue(), ""
+        except Exception as e:                 # noqa: BLE001
+            ok, why = False, f"{type(e).__name__}: {e}"
+        check(f"analyse runs end to end {name}", ok, why)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mj.analyse(argparse.Namespace(csv=plain, deg=1.5))
+    check("the idle-baseline section is absent when nothing recorded it",
+          "nothing drove it" not in buf.getvalue())
 
 
 print()

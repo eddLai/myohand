@@ -372,6 +372,9 @@ def main():
                 cal_request = False
                 cap = run_calibration(SETTINGS["device"], open_camera, cap)
                 opened_device, ema = SETTINGS["device"], None
+                filt.reset()      # the camera was gone for a minute, and the
+                # profile it came back with may not be the one the state was
+                # built under - same as a new source, not a dropped frame
             if SETTINGS["device"] != opened_device:     # follow the settings plate
                 cap.release()
                 cap = open_camera(SETTINGS["device"])

@@ -1,0 +1,87 @@
+calibration   2026-08-10T17:21:14
+tool          /home/ntk/myohand-feat-filter-stage/teleop/../nn/thumb_calib_ui.py 0 5.0 --save=session-20260810-172019
+exit          0
+outcome       saved as profile session-20260810-172019
+profile       session-20260810-172019
+
+六個姿勢，每個準備 4 秒、保持不動 5 秒（約 54 秒）。
+右手、手掌朝相機。指示顯示在視窗上，不必看這裡。
+⚠️ 邊框變綠 = 正在錄，手不要動，直到它跳下一個。
+提案的窗會從 model_complexity=0 (lite) 算，另一個只列出來對照。
+
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1786353619.617581   33683 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1786353619.658540   33762 gl_context.cc:369] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 590.48.01), renderer: NVIDIA GeForce RTX 4080 SUPER/PCIe/SSE2
+I0000 00:00:1786353619.661336   33683 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+W0000 00:00:1786353619.677430   33735 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1786353619.684606   33796 gl_context.cc:369] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 590.48.01), renderer: NVIDIA GeForce RTX 4080 SUPER/PCIe/SSE2
+W0000 00:00:1786353619.684771   33760 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1786353619.706998   33765 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1786353619.719805   33794 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+
+>>> P1  四指張到最開 — 四指盡量張直；拇指擺哪都可以
+W0000 00:00:1786353620.218794   33732 landmark_projection_calculator.cc:186] Using NORM_RECT without IMAGE_DIMENSIONS is only supported for the square ROI. Provide IMAGE_DIMENSIONS or use PROJECTION_MATRIX.
+    可用幀數: lite 151, full 151
+
+>>> P2  四指握拳 — 拇指放在拳頭外面，不要包進去
+    可用幀數: lite 151, full 151
+
+>>> P3  拇指伸直 — 手掌攤平；拇指往旁邊張開，跟四指同一個平面
+    可用幀數: lite 151, full 151
+
+>>> P4  拇指捲曲 — 只折拇指的兩個關節，指尖倒向食指根；不抬起也不壓下
+    可用幀數: lite 151, full 151
+
+>>> P5  拇指張開成 L 型 — 手掌攤平；拇指往外側張開，跟四指同一平面。不是壓在手心上！跟 P3 同一個手型
+    可用幀數: lite 151, full 151
+
+>>> P6  拇指轉到手心前方 — 拇指打直，往小指方向轉過手心；只轉不折，不要真的碰到小指
+    可用幀數: lite 150, full 150
+
+1810 列 -> /home/ntk/myohand-feat-filter-stage/nn/thumb_calib_ui.csv
+
+1810 列 -> /home/ntk/myohand-feat-filter-stage/nn/thumb_calib_ui_landmarks.csv
+
+
+########  每個姿勢量到什麼  ########
+
+=== lite   <- 提案用這個 ===
+  pose window key     channel           n      p10   median      p90
+  P1   CURL_OPEN      curl            604     39.3     43.9     45.9
+  P2   CURL_CLOSED    curl            604    156.7    171.4    174.9
+  P3   THUMB_OPEN     flexion         151     32.6     33.9     35.5
+  P4   THUMB_CLOSED   flexion         151     51.4     66.3     69.2
+  P5   OPP_MIN        opposition      151     15.9     17.5     19.7
+  P6   OPP_MAX        opposition      150     90.4     91.8     93.6
+
+=== full ===
+  pose window key     channel           n      p10   median      p90
+  P1   CURL_OPEN      curl            604     33.0     37.6     48.6
+  P2   CURL_CLOSED    curl            604    134.8    157.4    172.8
+  P3   THUMB_OPEN     flexion         151     20.2     21.4     22.5
+  P4   THUMB_CLOSED   flexion         151     47.8     55.6     58.9
+  P5   OPP_MIN        opposition      151      7.3      9.6     12.4
+  P6   OPP_MAX        opposition      150    106.9    108.5    109.7
+
+
+########  動作檢查：量 A 的時候有沒有動到 B  ########
+（2026-08-06 那次就是敗在這裡：標示為「捲曲」的五秒裡，
+  opposition 走了 124 度、flexion 只走 60，量到的是轉不是折）
+
+  P3 -> P4  opposition   變化   29.8°   OK
+  P5 -> P6  flexion      變化    0.4°   OK
+
+
+########  提案的窗（lite）  ########
+端點取姿勢分佈的 p10 / p90，兩端各留約一成餘裕。
+key               current     proposed   change
+CURL_OPEN             9.4         39.3   +29.9   ← 跟現行差很多，P1 這次做得夠滿嗎
+CURL_CLOSED         172.9        174.9   +2.0
+THUMB_OPEN           12.2         32.6   +20.4   ← 跟現行差很多，P3 這次做得夠滿嗎
+THUMB_CLOSED         93.0         69.2   -23.8   ← 跟現行差很多，P4 這次做得夠滿嗎
+OPP_MIN             -11.7         15.9   +27.6   ← 跟現行差很多，P5 這次做得夠滿嗎
+OPP_MAX             124.2         93.6   -30.6   ← 跟現行差很多，P6 這次做得夠滿嗎
+
+寫入 profile 'session-20260810-172019' -> /home/ntk/myohand-feat-filter-stage/camera/calibration.json
+⚠️ 它同時被設為 active，而這台機器是共用的。

@@ -165,8 +165,13 @@ absorbed 82%→24%、峰值電流 1397→95 mA、STA 沒再出現堵轉碼 5/6�
 ### 要手
 
 - [x] ~~跑一次有手在畫面裡的 run~~ — 2026-08-07，驅動電流已量到
-- [ ] **校正流程真手驗證**：走完一次 CALIBRATE，確認留下兩份 run log、
-      後面那份的 `gain_*` 是新校正的、兩份的 `replay check` 都乾淨
+- [x] ~~**校正流程真手驗證**~~ — 2026-08-10 走完一次，五項都成立：兩份 run log
+      （`runs/2026-08-10T17-20-06_before_calibrate` 與 `..T17-21-14_after_calibrate`）、
+      後面那份的 profile 是新的 `session-20260810-172019` 且六軸增益全變
+      （thumb_rot 7.06→12.36、thumb_bend 2.91→6.42、四指 4.99→6.02）、帶
+      `follows` 一行與一份 `calibration.txt`、兩份 replay 都 `worst 0.0 counts`。
+      ⚠️ **那份 profile 本身量得偏淺**，六個窗有五個被工具標「這次做得夠滿嗎」，
+      拇指彎曲窗寬從 80.8° 掉到 36.6°。當流程證據可以，要日常用該重校一次
 - [ ] **在現在的 mapping 下重錄 still/moving**。參數是在 `ROT_MIN=1226` 時代
       選的，`d1bb2bd` 之後 thumb_rot 的 counts 尺度是 1.54 倍，`BETA` 在那一軸
       的實際行為跟著變了，沒人量過

@@ -20,6 +20,7 @@
 | `meta.json` | 濾波參數、校正 profile、git commit、sink |
 | `summary.txt` | 人看的那份 |
 | `plot.svg` | 圖。衍生物，可以從 `frames.csv` 重生 |
+| `calibration.txt` | **只有跟在一次 CALIBRATE 後面的那一份會有**。校正工具在終端機印的每一行，加上這一側讀到的 exit code 與結論 |
 
 > `meta.json` 的 commit 是**錄的當下**那個 hash，而這條 branch 被 rebase 過兩次。
 > 底下幾份記的 `a5c01a6`、`a354f3f`、`5de84f7`、`4c33240` 因此不在 `git log` 裡，
@@ -29,7 +30,8 @@
 重生 summary 或圖：
 
     cd filter
-    python3 run_log.py ../runs/<名字>                    # 重寫 summary.txt
+    python3 run_log.py ../runs/<名字>                    # 印出 summary，不會自己寫回
+    python3 run_log.py ../runs/<名字> > /tmp/s && mv /tmp/s ../runs/<名字>/summary.txt
     # 產圖的指令就印在 summary.txt 最後
 
 格式與各欄意義見 [`../filter/README.md`](../filter/README.md)；逐欄語意與那些陷阱在
@@ -48,6 +50,8 @@ vault 的 `Command_Filter/Run_Log_Reference`，量測方法與參數依據在同
 | `2026-08-10T15-15-22_before_calibrate` | 張握拳，14.9 FPS | `4c33240` |
 | `2026-08-10T15-17-05_after_calibrate` | 張握拳，15.0 FPS | `4c33240` |
 | `2026-08-10T15-31-58_ecat_enp17s0` | 張握拳，30 FPS。`enp17s0` 上第一次進到 `OPERATIONAL` | `4c33240` |
+| `2026-08-10T17-20-06_before_calibrate` | 張握拳，25.7 FPS。校正前 | `09a0083` |
+| `2026-08-10T17-21-14_after_calibrate` | 張握拳，26.4 FPS。**第一份真的夾著一次成功校正的紀錄** | `09a0083` |
 
 前兩份是同一位操作者的快/慢對照，也是找出 thumb_bend 被驅動超過機械行程的
 證據。後兩份是 `a5c01a6`（把 thumb_bend 映射到它真正的行程）之後的驗證。
@@ -101,8 +105,39 @@ STA 只出現 0 和 1，**沒有 5 或 6**——那是 `hand_safety.c` 的堵轉
     follows       calibration refused - profile unchanged
     follows       calibration -> session-20260810-...
 
-這兩份是在那之前錄的，所以沒有那一行。**它們是兩段獨立的張握拳，不是校正前後的
-對照。**
+**而「為什麼被拒絕」現在也留得住。** 校正工具會說出是哪一對姿勢污染了、差幾度
+（`P3 -> P4` 超過 30 度就拒絕寫入），那句話原本只印在終端機上，所以這一次的理由
+現在已經找不回來了——`.112` 的 `nn/thumb_calib_ui.csv` 要是還沒被下一次校正蓋掉，
+`python3 thumb_calib_ui.py --replay` 還原得出來，那是唯一剩下的線索。之後每一次的
+輸出都會整份存進校正後那一份 run log 的 `calibration.txt`。
+
+這兩份是在那之前錄的，所以既沒有 `follows` 也沒有 `calibration.txt`。**它們是兩段
+獨立的張握拳，不是校正前後的對照。**`15-31-58` 也是——`.112` 上留著的
+`nn/thumb_calib_ui.csv` 時間戳是 15:31，`--replay` 出來是
+`P3 -> P4 opposition 30.5° ⛔`，也就是那份 log 同樣跟在一次被拒的校正後面。
+**那天踩了兩次，兩次都沒留下痕跡。**（那份錄製已另存為
+`nn/refused-2026-08-10T15-31.csv`，否則下次校正就蓋掉了。）
+
+## 17-20-06 / 17-21-14 才是校正前後的對照
+
+`17-21-14` 是第一份自己說得出上一份為什麼結束、也說得出校正說了什麼的紀錄：
+
+    follows       calibration -> session-20260810-172019
+    calibration.txt   exit 0 / saved as profile session-20260810-172019
+
+同一個檢查這次是 `P3 -> P4 opposition 29.8° OK`——門檻 30.0，**擦邊過**。
+
+增益因此整批換掉，而 deadband 是「度 × 該軸增益」，所以滑桿沒動、門檻卻變粗：
+
+| 軸 | 增益 | 1.5 度等於幾 counts |
+|---|---|---|
+| 四指 | 4.99 → 6.02 | 7.5 → 9.0 |
+| thumb_bend | 2.91 → **6.42** | 4.4 → **9.6** |
+| thumb_rot | 7.06 → **12.36** | 10.6 → **18.5** |
+
+⚠️ **這份 profile 不建議當日常用的那一份。** 六個窗有五個被工具標「這次做得夠滿嗎」，
+拇指彎曲的窗從 80.8° 收到 36.6°、對掌從 135.9° 收到 77.7°——姿勢做得比 08-07 那次淺，
+所以每一度值更多 counts。留這兩份是為了證明**流程**成立，不是為了那組數字。
 
 （另外，`summary.txt` 末尾那行畫圖指令指的是改名前的路徑。照上面的慣例改名之後
 它就過期了，要畫圖的話把路徑換成現在的目錄名。）

@@ -80,6 +80,7 @@ BYPASS_DEADBAND = 12       # what hand_sink.Sink.deadband was
 CAM_RETRY = 3.0            # seconds between reopen attempts while offline
 last_sent = None
 cal_note = ""              # what the last calibration attempt did
+cal_transcript = ""        # and everything it said while doing it
 cal_request = False        # a click asks; the loop owns the camera and acts
 CAL_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         os.pardir, "nn", "thumb_calib_ui.py")
@@ -149,6 +150,30 @@ def cut_reason(before, after):
     return f"calibration -> {after or '(module defaults)'}"
 
 
+def save_transcript(runlog, text):
+    """Keep what the calibration tool said next to the log it explains.
+
+    The `follows` line names the outcome in five words; this is the working
+    underneath it - which pose pair drifted, by how many degrees, and what
+    window the tool proposed against the one in force. It goes in the log
+    opened AFTER the calibration, the one whose gains the calibration set,
+    because that is the log an operator opens to find out what changed.
+
+    A run that cannot record this is still a run worth flying, same as a
+    run that cannot be logged at all.
+    """
+    if runlog is None or not text:
+        return
+    path = os.path.join(runlog.path, "calibration.txt")
+    try:
+        with open(path, "w") as fh:
+            fh.write(text)
+        print(f"calibration transcript: {path}")
+    except Exception as e:                                  # noqa: BLE001
+        print(f"could not record what the calibration said ({e})",
+              file=sys.stderr)
+
+
 def run_calibration(device, open_camera, cap):
     """Hand the camera to nn/thumb_calib_ui.py, then take it back.
 
@@ -169,7 +194,7 @@ def run_calibration(device, open_camera, cap):
     The cost is visible rather than hidden: this window stops for the
     length of a calibration and a second one appears in front of it.
     """
-    global auto_sync, cal_note, last_sent
+    global auto_sync, cal_note, cal_transcript, last_sent
     # Nobody drives the hand for the next minute, and the operator needs
     # both hands to pose. Whatever it was gripping, it should not be left
     # gripping it unattended.
@@ -189,15 +214,37 @@ def run_calibration(device, open_camera, cap):
     # Asking only whether the name loads says yes to a name that already
     # existed, and reports a refused calibration as a saved one.
     before = set(hm.list_profiles()[1])
+    argv = [sys.executable, "-u", CAL_TOOL, str(device), str(CAL_HOLD),
+            "--save=" + name]
+    said = []
+    rc = None
     try:
-        r = subprocess.run([sys.executable, CAL_TOOL, str(device),
-                            str(CAL_HOLD), "--save=" + name])
-        if r.returncode != 0:
-            cal_note = f"calibration did not finish (exit {r.returncode})"
+        # Read through a pipe rather than letting the child write straight to
+        # the terminal. The tool refuses a contaminated recording and prints
+        # WHICH pair drifted and by how many degrees, and that sentence used
+        # to live only in the operator's scrollback: runs/2026-08-10T15-17-05
+        # records a refusal whose reason is now unrecoverable.
+        #
+        # Copied out line by line as it arrives, not collected and printed at
+        # the end, because the terminal the operator had is the terminal they
+        # keep - a minute of silence in the middle of a calibration would be
+        # this change making things worse. -u for the same reason: a child
+        # writing to a pipe block-buffers, and 8 KB is more than a whole run
+        # of this tool prints.
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            said.append(line)
+        sys.stdout.flush()
+        rc = proc.wait()
+        if rc != 0:
+            cal_note = f"calibration did not finish (exit {rc})"
         elif name in before or hm.load_calibration(name) is None:
             # the tool ran and declined to save - a contaminated recording
-            # is refused there, and the reason is on the terminal
-            cal_note = "calibration refused - see the terminal"
+            # is refused there, and it says which pair drifted and by how
+            # much. Under --no-log the terminal is still the only copy.
+            cal_note = "calibration refused - see the run log"
         else:
             cal_note = f"saved as profile {name}"
             # A window is measured in order to be used, and the operator is
@@ -208,6 +255,21 @@ def run_calibration(device, open_camera, cap):
             auto_sync = True
     except Exception as e:      # noqa: BLE001 - losing the camera is worse
         cal_note = f"could not run the calibration tool: {e}"
+        said.append(f"\n{e}\n")
+    # what the tool said, under enough header to be read a month later by
+    # someone who was not in the room. The outcome goes on top because the
+    # transcript does not state it: the tool reports its own refusal, but
+    # "exit 3" and "the profile is not there afterwards" are this side's
+    # readings, and they are what cal_note was derived from.
+    cal_transcript = "".join(
+        [f"calibration   {time.strftime('%Y-%m-%dT%H:%M:%S')}\n",
+         f"tool          {' '.join(argv[2:])}\n",
+         # no code means Popen itself raised, which is the tool not being
+         # there. The exception is the last line of the transcript either way
+         f"exit          {'not launched' if rc is None else rc}\n",
+         f"outcome       {cal_note}\n",
+         f"profile       {hm.ACTIVE_PROFILE or '(module defaults)'}\n",
+         "\n"] + said)
     print(f"calibration profile: {hm.ACTIVE_PROFILE or '(module defaults)'}")
     # the child only just let go of /dev/video*, and the first open after
     # that can still come back closed. Without this the loop falls into the
@@ -451,6 +513,7 @@ def main():
                 # which is a different run log and has to read as one.
                 filt, runlog = cut_run(
                     runlog, cut_reason(prof_before, hm.ACTIVE_PROFILE))
+                save_transcript(runlog, cal_transcript)
             if SETTINGS["device"] != opened_device:     # follow the settings plate
                 cap.release()
                 cap = open_camera(SETTINGS["device"])

@@ -1,0 +1,32 @@
+{
+  "started": "2026-08-10T17-21-14",
+  "git_commit": "09a0083",
+  "host": "ntk-Default-string",
+  "argv": [
+    "teleop_app.py",
+    "--socket",
+    "/tmp/inspire_hand.sock",
+    "--device",
+    "0"
+  ],
+  "gains": {
+    "pinky": 6.0176991150442465,
+    "ring": 6.0176991150442465,
+    "middle": 6.0176991150442465,
+    "index": 6.0176991150442465,
+    "thumb_bend": 6.420765027322404,
+    "thumb_rot": 12.355212355212357
+  },
+  "filter": {
+    "mincutoff": 0.05,
+    "beta": 0.0005,
+    "dcutoff": 4.0,
+    "deg": 1.5,
+    "dt_max": 0.066
+  },
+  "sink": "daemon",
+  "device": 0,
+  "calibration": "session-20260810-172019",
+  "rate_hz": 50.0,
+  "opened_after": "calibration -> session-20260810-172019"
+}

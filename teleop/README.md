@@ -117,6 +117,11 @@ sudo systemctl enable --now ecat-link.service
 增益。要看的通常是後面那份；前面那份留著，因為讓你決定重新校正的往往就是它。
 理由見 [`../filter/README.md`](../filter/README.md) 的「一份 run log ＝ 一段連續的濾波器」。
 
+**校正工具在終端機講的話，會存進後面那份 run log 的 `calibration.txt`。** 被拒絕的
+時候它會說出是哪一對姿勢污染了、差幾度——那句話以前只活在 scrollback 裡，關掉視窗
+就沒了（`runs/2026-08-10T15-17-05_after_calibrate` 就是這樣一次，理由已經找不回來）。
+它照樣即時印在終端機上，只是現在同時留一份。
+
 姿勢的細節、為什麼「拇指捲曲」不是「把拇指壓在手掌上」、以及校正修不好的那些事，
 見 [`../nn/CALIBRATION.md`](../nn/CALIBRATION.md)。**第一次校正前先看那份。**
 

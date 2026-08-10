@@ -176,9 +176,10 @@ class RunLog:
         row += self._gain_row
         row += ([f"{v:.4f}" for v in sent] if sent is not None
                 else [""] * len(AXES))
-        # Four decimals is exact for this one: the slider is a 0.1 ladder,
-        # so every value it can produce survives the round trip unchanged,
-        # and the threshold the replay rebuilds is the threshold that flew.
+        # Four decimals is exact for this one: the slider steps 0.5 between
+        # 0.5 and 4.0, so every value it can produce survives the round trip
+        # unchanged, and the threshold the replay rebuilds is the threshold
+        # that flew.
         row += [1 if was_sent else 0, mode,
                 "" if not tele or tele.get("applying") is None
                 else (1 if tele["applying"] else 0),

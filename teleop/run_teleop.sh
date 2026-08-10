@@ -107,7 +107,21 @@ fi
 if daemon_answers; then
     echo "run_teleop: using the handd already on $SOCK (leaving it running)" >&2
 elif [ -n "$IFACE" ]; then
-    [ -x ../hand_fw/handd ] || { echo "../hand_fw/handd is not built - run: make -C ../hand_fw handd && sudo make -C ../hand_fw cap" >&2; exit 1; }
+    # Do not offer `make handd` when SOEM is missing: it cannot work. SOEM
+    # is a gitignored vendor clone, so a fresh checkout has none of it, and
+    # make's reply to that is "No rule to make target ...libsoem.a", which
+    # reads like the Makefile is broken. Send them to the step that is
+    # actually missing; hand_fw/Makefile prints the commands.
+    if [ ! -x ../hand_fw/handd ]; then
+        echo "../hand_fw/handd is not built." >&2
+        if [ ! -f ../hand_fw/soem_build/build/libsoem.a ]; then
+            echo "Neither is SOEM, which it needs - run 'make -C ../hand_fw all'" >&2
+            echo "and it will print how to get SOEM first." >&2
+        else
+            echo "Run: make -C ../hand_fw all && sudo make -C ../hand_fw cap" >&2
+        fi
+        exit 1
+    fi
     echo "run_teleop: starting handd on $IFACE" >&2
     ../hand_fw/handd --iface="$IFACE" --socket="$SOCK" &
     DAEMON_PID=$!

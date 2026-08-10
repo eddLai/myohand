@@ -222,10 +222,21 @@ thumb_rot 在 `~1048`），對這兩軸下 `1850` 是把它們頂在止點上。
 或逐步來（從 repo 根目錄）：
 
     python3 -m venv venv && venv/bin/pip install -r requirements.txt
+    export PATH="$PWD/venv/bin:$PATH"          # ← 不能省，見下
     git clone https://github.com/OpenEtherCATsociety/SOEM.git hand_fw/soem_build/SOEM
-    cmake -S hand_fw/soem_build/SOEM -B hand_fw/soem_build/build
+    cmake -S hand_fw/soem_build/SOEM -B hand_fw/soem_build/build \
+          -DCMAKE_BUILD_TYPE=Release -DSOEM_BUILD_SAMPLES=OFF
     cmake --build hand_fw/soem_build/build -j4
-    make -C hand_fw all && make -C hand_fw cap
+    make -C hand_fw all && sudo make -C hand_fw cap
+
+> ⚠️ **那行 `export PATH` 是必要的，不是講究。** SOEM 現在要 **cmake ≥ 3.28**，
+> 而 `.112` 的系統 cmake 是 3.22.1——`requirements.txt` 裡有 `cmake` 就是為了這件事
+> （venv 裡是 4.4.2）。少了它會停在
+> `CMake Error ... CMake 3.28 or higher is required`。venv 不在 repo 根目錄的機器
+> （`.112` 是 `~/myohand/venv`）就指向它自己那個。
+>
+> **`soem_build/` 是 gitignore 的 vendor clone**，所以每一份新 checkout 都要重做這段。
+> 2026-08-10 在 `.112` 上就是這樣：workspace 是 08-07 的新 clone，`handd` 從來沒建過。
 
 `cap` 每次重編都要重跑（sudo 一次）。`hand_set.c` 靠 `-I .` 找到 `hand_safety.h`，
 所以一律用 `make -C hand_fw` 建置。

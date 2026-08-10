@@ -7,22 +7,54 @@
 ## 開起來
 
 ```bash
-cd ~/myohand/teleop && ./run_teleop.sh --iface=eno1
+cd ~/myohand/teleop && ./run_teleop.sh --iface=enp17s0
 ```
 
 `--iface` 是**接機器手那張網卡**。給了它就會自己啟動 `handd`、跑完自己收掉；
 Ctrl+C 也會收，不會留東西卡在 EtherCAT 匯流排上。
 
-⚠️ **網卡名每台機器不一樣。** 查哪張是通的：
+⚠️ **網卡名每台機器不一樣。`ntk112` 上是 `enp17s0`。**
+
+**先把網卡拉起來再問它有沒有線**——這是唯一重要的一步：
 
 ```bash
-for i in /sys/class/net/*; do
-    printf '%-12s %s\n' "$(basename "$i")" "$(cat "$i/operstate")"
+sudo ip link set enp17s0 up          # 沒這行，下面永遠回 no
+sleep 2
+for i in $(ls /sys/class/net | grep -v -e lo -e docker); do
+    printf '%-10s %s\n' "$i" "$(ethtool $i 2>/dev/null | grep 'Link detected')"
 done
 ```
 
-`up` 而且 `cat $i/carrier` 是 `1` 的那張才是。`ntk112` 上是 **`eno1`**，
-不是各處文件裡寫的 `enp17s0`（那是另一台機器的名字，在這裡是 `down`）。
+> ⚠️ **關著的網卡跟空的網卡長得一模一樣。** admin down 的介面 PHY 沒通電，不會協商，
+> 所以不管插什麼 `ethtool` 都回 `Link detected: no`、`carrier` 檔讀出 `Invalid argument`、
+> **孔上的燈也不會亮**。用看的、用讀的都分辨不出來。
+>
+> 本檔 2026-08-10 之前寫的是「`carrier` 是 `1` 的那張才是，`ntk112` 上是 `eno1`」——
+> **那條規則在這台永遠指向辦公網卡**：`eno1` 持有 `120.126.83.112`、是預設路由、也是
+> ssh 進來的那條，它的 carrier 當然一直是 1；而手所在的 `enp17s0` 平常是關的，
+> 於是被判成「另一台機器的名字」。那次誤判花了一個下午。
+
+`enp17s0` 是 NetworkManager `unmanaged`（對 EtherCAT 是對的，不該讓它去 DHCP），
+所以**每次重開機都會回到 down**。要它自己起來：
+
+```bash
+sudo tee /etc/systemd/system/ecat-link.service >/dev/null <<'EOF'
+[Unit]
+Description=Bring the EtherCAT NIC up (no IP, NM leaves it unmanaged)
+After=network-pre.target
+[Service]
+Type=oneshot
+ExecStart=/sbin/ip link set enp17s0 up
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable --now ecat-link.service
+```
+
+**證據**（2026-08-10）：`ip link set enp17s0 up` 之後 `Link detected: yes`，
+`./run_teleop.sh --iface=enp17s0` 進到 `handd: OPERATIONAL` 並錄到真的 ANGLEACT
+與電流（`runs/2026-08-10T15-31-58`）。
 
 ### 沒有手也想看
 
@@ -97,7 +129,7 @@ done
 自己的窗自己指名：
 
 ```bash
-./run_teleop.sh --iface=eno1 --profile=你的名字-20260807
+./run_teleop.sh --iface=enp17s0 --profile=你的名字-20260807
 ```
 
 有哪些窗可以選：
@@ -127,13 +159,14 @@ cd ~/myohand && venv/bin/python3 camera/hand_mapping.py
 ## 卡住的時候
 
 **`could not open the daemon sink`**
-`handd` 沒在跑。加 `--iface=eno1` 讓它自己起，或另開一個終端機跑
-`cd ~/myohand/hand_fw && ./handd --iface=eno1 --socket=/tmp/inspire_hand.sock`。
+`handd` 沒在跑。加 `--iface=enp17s0` 讓它自己起，或另開一個終端機跑
+`cd ~/myohand/hand_fw && ./handd --iface=enp17s0 --socket=/tmp/inspire_hand.sock`。
 
 **`../hand_fw/handd is not built`**
-在 worktree 或新 clone 裡跑，執行檔還沒編。編：
-`make -C ../hand_fw handd && sudo make -C ../hand_fw cap`。
-或是連過去用本體編好的：`ln -s ~/myohand/hand_fw/handd ../hand_fw/handd`。
+在 worktree 或新 clone 裡跑，執行檔還沒編：`make -C ../hand_fw all && sudo make -C ../hand_fw cap`。
+**新 clone 還要先建 SOEM**（gitignore 的 vendor clone，`pull` 永遠不會帶它來）——
+`make` 會自己把步驟印出來，照著做。要 cmake ≥ 3.28，系統那顆通常太舊，用 venv 裡的。
+細節見 [`../hand_fw/README.md`](../hand_fw/README.md) 的「建置」。
 
 **相機開不起來 / 畫面是黑的**
 先確認沒有別的程式佔著：
@@ -161,7 +194,15 @@ ln -s ~/myohand/teleop/teleop_settings.json teleop/teleop_settings.json
 （`ntk112` 的在 `:1`）。要嘛在機器自己的終端機跑，要嘛 `DISPLAY=:1 ./run_teleop.sh ...`。
 
 **`need CAP_NET_RAW or root`**
-看起來像權限，多半是網卡名給錯了。回去看最上面那段。
+這句話對兩件事都會出現，**兩個都要查**：
+
+1. **capabilities 真的沒設**（`getcap ../hand_fw/handd` 是空的）→ `sudo make -C ../hand_fw cap`。
+   **每個 worktree、每次重編都要重下**，因為 caps 掛在 inode 上。
+2. **網卡名給錯**，包含「名字對但介面是關的」——回去看最上面那段。
+
+分辨方法：設好 caps 之後訊息會**改變**。還是同一句就是 caps；變成
+`no EtherCAT slave answered` 就換去查線、電源與介面狀態。2026-08-10 兩種都遇到了，
+順序就是這樣。
 
 ---
 

@@ -156,6 +156,22 @@ check("dead sink -> calibration still runs",
 
 ta.subprocess.run = subprocess.run
 
+# 5. what the run log opened after a calibration records about it. The cut
+#    happens either way - the camera was gone and the filter is rebuilt - so
+#    the log is the only place that can say whether anything changed. Before
+#    this, a refused calibration produced a before/after pair that read as a
+#    real one: runs/2026-08-10T15-15-22 and 15-17-05 carry the same profile
+#    and the same six gains to the last digit.
+check("refused -> the next log says the profile held",
+      ta.cut_reason("session-A", "session-A"),
+      "calibration refused - profile unchanged")
+check("saved -> the next log names the profile it moved to",
+      ta.cut_reason("session-A", "session-B"), "calibration -> session-B")
+check("saved from module defaults -> still names it",
+      ta.cut_reason(None, "session-B"), "calibration -> session-B")
+check("refused from module defaults -> still reads as unchanged",
+      ta.cut_reason(None, None), "calibration refused - profile unchanged")
+
 # clean up after ourselves: the fixture profile is not measured data
 import json  # noqa: E402
 

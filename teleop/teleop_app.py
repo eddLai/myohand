@@ -132,6 +132,23 @@ def toggle_calibration():
     cal_request = True
 
 
+def cut_reason(before, after):
+    """What the next run log should record about the calibration behind it.
+
+    The run log is cut on every CALIBRATE press, because the camera goes
+    away for a minute either way and the filter comes back rebuilt. But a
+    refused calibration leaves the gains and the profile exactly where they
+    were, so the pair either side of the cut is indistinguishable from a
+    pair that really does bracket a change - runs/2026-08-10T15-15-22 and
+    15-17-05 are such a pair, filed under before/after names that nothing in
+    them supports. The profile in force is the fact that settles it, so it
+    is what gets recorded.
+    """
+    if after == before:
+        return "calibration refused - profile unchanged"
+    return f"calibration -> {after or '(module defaults)'}"
+
+
 def run_calibration(device, open_camera, cap):
     """Hand the camera to nn/thumb_calib_ui.py, then take it back.
 
@@ -301,11 +318,13 @@ def main():
         sink.deadband = 1
     filt = hand_filter.HandFilter.for_camera(deg=SETTINGS["deadband_deg"])
 
-    def open_runlog():
+    def open_runlog(after=None):
         """A run log carrying the gains and the profile in force right now.
 
         Called again whenever the filter is rebuilt, so every one of these
         describes exactly one stretch of continuous filter - see cut_run.
+        `after` is why the previous one ended, recorded here because that is
+        the log the operator reads to find out what changed.
         """
         if args.no_log:
             return None
@@ -321,7 +340,8 @@ def main():
                                "dt_max": hand_filter.DT_MAX},
                 extra={"sink": sink.name, "device": SETTINGS["device"],
                        "calibration": hm.ACTIVE_PROFILE or "(module defaults)",
-                       "rate_hz": args.rate})
+                       "rate_hz": args.rate,
+                       **({"opened_after": after} if after else {})})
             print(f"run log: {rl.path}")
             return rl
         except Exception as e:                              # noqa: BLE001
@@ -415,19 +435,22 @@ def main():
                           f" there", file=sys.stderr)
             return (hand_filter.HandFilter.for_camera(
                         deg=SETTINGS["deadband_deg"]),
-                    open_runlog())
+                    open_runlog(after=why))
 
         while not stop:
             if cal_request:
                 # serviced here, not in the click handler: this is the scope
                 # that holds the camera, and handing it over is the whole job
                 cal_request = False
+                prof_before = hm.ACTIVE_PROFILE
                 cap = run_calibration(SETTINGS["device"], open_camera, cap)
                 opened_device, ema = SETTINGS["device"], None
                 # the camera was gone for a minute and the profile it came
                 # back with may not be the one the state was built under,
-                # nor the one its gains were
-                filt, runlog = cut_run(runlog, "calibration")
+                # nor the one its gains were. It may also be the same one,
+                # which is a different run log and has to read as one.
+                filt, runlog = cut_run(
+                    runlog, cut_reason(prof_before, hm.ACTIVE_PROFILE))
             if SETTINGS["device"] != opened_device:     # follow the settings plate
                 cap.release()
                 cap = open_camera(SETTINGS["device"])

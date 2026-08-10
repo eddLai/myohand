@@ -111,6 +111,10 @@ POSES = [
 # property of the landmarks under occlusion, measured and written up in
 # README.md. Refusing over it would reject every honest recording, which
 # teaches people to route around the check. It is reported and left alone.
+# POSES is filtered under --replay to whatever the recording holds, so the
+# completeness check below has to remember the full set from up here.
+ALL_KEYS = tuple(p[4] for p in POSES)
+
 CHECKS = [("P3", "P4", "opposition", "折拇指的時候不該轉", "refuse"),
           ("P5", "P6", "flexion", "掃對掌會帶到彎曲讀數（模型的已知洩漏，非操作問題）",
            "warn")]
@@ -179,7 +183,8 @@ def measure(rgb):
                                     lbl.label, lbl.score, hm.HANDEDNESS)
         wl = res.multi_hand_world_landmarks[0].landmark
         out[c] = (res, int(trust), why, features(wl),
-                  hm.pose_from_world_landmarks(wl, hm.HANDEDNESS), wl)
+                  hm.pose_from_world_landmarks(wl, hm.HANDEDNESS), wl,
+                  lbl.label, lbl.score)
     return out
 
 
@@ -327,10 +332,11 @@ for i, (tag, zh, detail, chan, key_name, end) in enumerate([] if REPLAY else POS
                 for c in MODELS:
                     if m[c] is None:
                         continue
-                    _, trust, why, fe, _tgt, wl = m[c]
+                    _, trust, why, fe, _tgt, wl, lbl_s, score = m[c]
                     got[c] += trust
                     rec = {"pose": tag, "model": NAME[c], "trust": trust,
-                           "why": why}
+                           "why": why, "label": lbl_s,
+                           "score": round(score, 3)}
                     for k in ("flexion", "abduction", "opposition"):
                         rec[k] = round(fe[k], 2)
                     for n, cu in zip(AXES, fe["curl"]):
@@ -449,7 +455,7 @@ proposed = {}
 for tag, zh, _d, chan, key_name, end in POSES:
     v = values(tag, CPLX, chan)
     if len(v) < 3:
-        print("%-14s %10s %12s   可用幀不足，沿用現值"
+        print("%-14s %10s %12s   可用幀不足 → 這個鍵會缺，不會沿用現值"
               % (key_name, getattr(hm, key_name), "-"))
         continue
     val = round(pct(v, 10 if end == "lo" else 90), 1)
@@ -470,6 +476,16 @@ for lo_k, hi_k in (("CURL_OPEN", "CURL_CLOSED"), ("THUMB_OPEN", "THUMB_CLOSED"),
 if not SAVE:
     print("\n沒有寫入任何東西。確認上面沒有 ⚠️ 之後，加 --save=名稱 重跑，")
     print("或直接把這段輸出貼回來。")
+elif aborted:
+    print("\n拒絕寫入：這次是中止的，六個姿勢沒有走完。")
+    print("錄到的資料仍然存進 CSV 了，但不會寫成 profile。")
+elif set(ALL_KEYS) - set(proposed):
+    miss = [k for k in ALL_KEYS if k not in proposed]
+    print("\n拒絕寫入：%d 個窗沒有量到 — %s" % (len(miss), ", ".join(miss)))
+    print("缺的鍵不會沿用現行 profile，下次啟動會退回程式碼字面值：")
+    for k in miss:
+        print("    %-14s → %s" % (k, getattr(hm, k)))
+    print("重錄那幾個姿勢比存一個半套的窗便宜。")
 elif contaminated:
     print("\n拒絕寫入：動作檢查有 ⚠️，這批資料量的不是它宣稱的那個關節。")
     print("重錄一次比存一個錯的窗便宜。真要存就先把 CHECKS 的問題解決。")

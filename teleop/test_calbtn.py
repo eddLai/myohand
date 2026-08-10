@@ -6,11 +6,18 @@ got wrong, so each branch is exercised with the child stubbed out: the
 one that saves, the one the tool refuses, the one that crashes, and the
 one where the tool is not there at all.
 
+Each branch also has to keep what the child said. The tool prints why it
+refused and nothing else records it, so the transcript is checked here
+too - including on the branches where there is no tool to print anything.
+
     ~/myohand/venv/bin/python3 test_calbtn.py
 """
+import io
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -75,7 +82,7 @@ def open_camera(device):
 
 def run_with(stub, sink=None):
     del opened[:], sent[:]
-    ta.subprocess.run = stub
+    ta.subprocess.Popen = stub
     ta.sink = sink or Sink()
     ta.last_sent = [1] * 6            # stale, as it is after a calibration
     ta.auto_sync = False              # the operator has not clicked SYNC
@@ -94,9 +101,24 @@ if not os.path.exists(ta.CAL_TOOL):
 print("\nthe four outcomes:")
 
 
-class R:
-    def __init__(self, rc):
-        self.returncode = rc
+REFUSAL = ("  P3 -> P4  opposition     變化   47.2°   "
+           "⛔ 汙染，拒絕寫入 — 折拇指的時候不該轉\n")
+
+
+class Proc:
+    """Stands in for the calibration tool: what it printed, then its code.
+
+    Shaped like Popen rather than run() because the reason for a refusal
+    has to be read as it is printed - the operator keeps watching the same
+    terminal, so the output cannot be swallowed until the child exits.
+    """
+
+    def __init__(self, rc, said=REFUSAL):
+        self.stdout = io.StringIO(said)
+        self._rc = rc
+
+    def wait(self):
+        return self._rc
 
 
 # 1. the tool ran and saved: the profile is there afterwards, so the note
@@ -107,9 +129,11 @@ saved = {}
 def stub_saves(argv, **kw):
     name = [a for a in argv if a.startswith("--save=")][0].split("=", 1)[1]
     saved["name"] = name
+    assert "-u" in argv, ("the child buffers into a pipe without -u, and the"
+                          " terminal goes quiet for the whole calibration")
     hm.save_calibration({"THUMB_OPEN": 20.0, "THUMB_CLOSED": 90.0},
                         name=name, note="test fixture", path=hm.CAL_PATH)
-    return R(0)
+    return Proc(0, "THUMB_OPEN 18.4 -> 20.0\n")
 
 
 before = hm.ACTIVE_PROFILE
@@ -121,8 +145,14 @@ if not ta.auto_sync:
     fails.append("sync after save")
 
 # 2. the tool ran and declined to save (a contaminated recording)
-check("refused -> note says so", run_with(lambda a, **k: R(0)),
+check("refused -> note says so", run_with(lambda a, **k: Proc(0)),
       "calibration refused")
+# and the sentence saying WHICH pair drifted is kept. Nothing else records
+# it: runs/2026-08-10T15-17-05 is a refusal whose reason is gone
+check("refused -> the reason it gave is kept", ta.cal_transcript,
+      "折拇指的時候不該轉")
+check("refused -> transcript carries the reading too", ta.cal_transcript,
+      "outcome       calibration refused")
 # a refusal must not start the hand moving: nothing was demonstrated, so
 # there is nothing the operator has agreed to drive it with
 print("  %-42s %s" % ("refused -> sync stays off",
@@ -131,8 +161,10 @@ if ta.auto_sync:
     fails.append("sync after refusal")
 
 # 3. the tool exited nonzero (aborted with q, or crashed)
-check("nonzero -> note carries the code", run_with(lambda a, **k: R(3)),
+check("nonzero -> note carries the code", run_with(lambda a, **k: Proc(3)),
       "exit 3")
+check("nonzero -> transcript carries it as well", ta.cal_transcript,
+      "exit          3")
 
 
 # 4. the tool could not be launched at all
@@ -142,8 +174,13 @@ def stub_missing(argv, **kw):
 
 check("unlaunchable -> note explains", run_with(stub_missing),
       "could not run the calibration tool")
+# nothing was printed by a child that never started, so the transcript is
+# the header alone - and it has to say that rather than come out empty,
+# because an empty one is not written at all
+check("unlaunchable -> transcript says it never ran", ta.cal_transcript,
+      "exit          not launched")
 
-check("the hand is opened before posing", run_with(lambda a, **k: R(0)),
+check("the hand is opened before posing", run_with(lambda a, **k: Proc(0)),
       "calibration refused")
 print("  %-42s %s" % ("PARK was the pose sent",
                       "ok" if sent == [ta.PARK] else "FAIL  %r" % sent))
@@ -152,9 +189,9 @@ if sent != [ta.PARK]:
 
 # a sink with no hand behind it must not cost the operator the camera
 check("dead sink -> calibration still runs",
-      run_with(lambda a, **k: R(0), sink=DeadSink()), "calibration refused")
+      run_with(lambda a, **k: Proc(0), sink=DeadSink()), "calibration refused")
 
-ta.subprocess.run = subprocess.run
+ta.subprocess.Popen = subprocess.Popen
 
 # 5. what the run log opened after a calibration records about it. The cut
 #    happens either way - the camera was gone and the filter is rebuilt - so
@@ -171,6 +208,38 @@ check("saved from module defaults -> still names it",
       ta.cut_reason(None, "session-B"), "calibration -> session-B")
 check("refused from module defaults -> still reads as unchanged",
       ta.cut_reason(None, None), "calibration refused - profile unchanged")
+
+# 6. and where that working is kept. The log opened after the calibration
+#    is the one whose gains it set, so it is the one that has to carry it.
+print("\nthe transcript, next to the log it explains:")
+
+
+class Log:
+    def __init__(self, path):
+        self.path = path
+
+
+tmp = tempfile.mkdtemp(prefix="calbtn-")
+try:
+    ta.save_transcript(Log(tmp), "outcome       refused\n" + REFUSAL)
+    written = os.path.join(tmp, "calibration.txt")
+    check("it lands in the run log's own directory",
+          "yes" if os.path.exists(written) else "no", "yes")
+    check("with what the tool said in it", open(written).read(),
+          "折拇指的時候不該轉")
+
+    # --no-log flies without a run log at all, and a calibration during one
+    # must not become the thing that ends the session
+    ta.save_transcript(None, "outcome       refused\n")
+    print("  %-42s ok" % "no run log -> nothing written, no crash")
+
+    # a directory that has gone away is the same kind of event as a run log
+    # that could not be opened: reported, not fatal
+    shutil.rmtree(tmp)
+    ta.save_transcript(Log(tmp), "outcome       refused\n")
+    print("  %-42s ok" % "unwritable -> reported, still flying")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
 
 # clean up after ourselves: the fixture profile is not measured data
 import json  # noqa: E402

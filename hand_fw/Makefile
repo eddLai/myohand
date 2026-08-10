@@ -6,6 +6,35 @@ LDLIBS = $(BUILD)/libsoem.a -lpthread -lrt
 
 all: hand_ctl hand_set handd
 
+# SOEM is a vendored clone and gitignored, so a fresh checkout does not have
+# it and every target below is unbuildable until it does. Without this rule
+# make says "No rule to make target 'soem_build/build/libsoem.a'", which
+# names the missing file and nothing about where it comes from - and the
+# thing that sends people here, run_teleop.sh, used to tell them to run this
+# very make. Say what to do instead.
+#
+# The cmake version is load-bearing: SOEM needs >= 3.28 and the system cmake
+# is older than that on at least one of our machines, which is why
+# requirements.txt pins one into the venv and setup.sh puts it on PATH first.
+$(BUILD)/libsoem.a:
+	@echo "" >&2
+	@echo "SOEM is not built. It is a vendored clone and gitignored, so a" >&2
+	@echo "fresh checkout never has it. From the repo root:" >&2
+	@echo "" >&2
+	@echo "  export PATH=\"<the venv>/bin:\$$PATH\"   # SOEM needs cmake >= 3.28" >&2
+	@echo "  git clone https://github.com/OpenEtherCATsociety/SOEM.git \\" >&2
+	@echo "        hand_fw/soem_build/SOEM" >&2
+	@echo "  cmake -S hand_fw/soem_build/SOEM -B hand_fw/soem_build/build \\" >&2
+	@echo "        -DCMAKE_BUILD_TYPE=Release -DSOEM_BUILD_SAMPLES=OFF" >&2
+	@echo "  cmake --build hand_fw/soem_build/build -j\$$(nproc)" >&2
+	@echo "" >&2
+	@echo "then: make -C hand_fw all && sudo make -C hand_fw cap" >&2
+	@echo "" >&2
+	@echo "../setup.sh does all of it including the venv - but read its" >&2
+	@echo "header first, it must not be run on the KD240." >&2
+	@echo "" >&2
+	@false
+
 hand_ctl: hand_ctl.c hand_safety.c hand_safety.h hand_collision_table.h $(BUILD)/libsoem.a
 	gcc $(CFLAGS) hand_ctl.c hand_safety.c -o hand_ctl $(LDLIBS)
 

@@ -234,7 +234,16 @@ check("the same filtered signal scores differently under the two gates",
 # ---- telemetry column handling --------------------------------------------
 
 def write_csv(path, n=120, with_tele=False):
+    """A recording shaped exactly as `record` writes one, header included.
+
+    Built through mj.tele_row rather than by hand: a fixture that assembles
+    its own columns can only ever agree with itself, and this one used to -
+    it was six columns short in the same way the recorder was, so the
+    frames it produced went through the whole analysis carrying no gain
+    stamp and nothing said so.
+    """
     r = random.Random(11)
+    gain_row = [f"{mj.gains()[a]:.4f}" for a in AXES]
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(mj.FIELDS)
@@ -244,14 +253,40 @@ def write_csv(path, n=120, with_tele=False):
                    + [f"{v:.1f}" for v in tgt]
                    + [f"{r.gauss(80, 1):.3f}" for _ in mj.FINGERS]
                    + [f"{r.gauss(60, 1):.3f}", f"{r.gauss(45, 1):.3f}"])
-            if with_tele:
-                # one gap, so the "carry telemetry" count has to be real
-                row += ([""] * 12 if k == 5 else
-                        [f"{1500 + r.gauss(0, 2):.0f}" for _ in AXES]
-                        + [f"{abs(r.gauss(0, 3)):.0f}" for _ in AXES])
-            else:
-                row += [""] * 12
-            w.writerow(row)
+            st = None
+            if with_tele and k != 5:      # one gap, so the "carry telemetry"
+                st = {"bus": "up",        # count has to be real
+                      "ang": [f"{1500 + r.gauss(0, 2):.0f}" for _ in AXES],
+                      "cur": [f"{abs(r.gauss(0, 3)):.0f}" for _ in AXES],
+                      "sta": [1] * len(AXES)}
+            w.writerow(row + mj.tele_row(st) + gain_row)
+
+
+# ---- the recorder's row is as wide as its own header ------------------------
+#
+# `record` needs a camera and a daemon, so its rows had never been written
+# under test, and they went out six columns short of the header for three
+# days: `sta` was added to TELE_FIELDS and to nothing else. Nothing raises -
+# csv writes a short row and DictReader reads the following columns into the
+# wrong names - so it surfaced as --telemetry recordings quietly losing
+# their gain stamp, which is the one thing those columns are there to
+# protect. Width is therefore asserted, not reviewed.
+
+_full = {"bus": "up", "ang": [1500] * 6, "cur": [0] * 6, "sta": [1] * 6}
+check("a telemetry row is exactly as wide as TELE_FIELDS",
+      len(mj.tele_row(_full)) == len(mj.TELE_FIELDS),
+      f"{len(mj.tele_row(_full))} of {len(mj.TELE_FIELDS)}")
+check("so is one from a daemon too old to report sta",
+      len(mj.tele_row({k: v for k, v in _full.items() if k != "sta"}))
+      == len(mj.TELE_FIELDS))
+check("so is one taken while the bus was down, or with no daemon at all",
+      len(mj.tele_row({"bus": "down"})) == len(mj.TELE_FIELDS)
+      and len(mj.tele_row(None)) == len(mj.TELE_FIELDS))
+check("the three pieces of a recorded row add up to the header",
+      len(mj.MAP_FIELDS) + len(mj.tele_row(_full)) + len(mj.GAIN_FIELDS)
+      == len(mj.FIELDS))
+check("the status word reaches the columns it was added for",
+      mj.tele_row(_full)[-len(AXES):] == ["1"] * len(AXES))
 
 
 # ---- settling: the head of a recording is not noise ------------------------
@@ -289,6 +324,17 @@ with tempfile.TemporaryDirectory() as d:
     check("and drops the frames whose telemetry is blank rather than faking",
           len(got[0]) == len(rows_t) - 1,
           f"{len(got[0])} of {len(rows_t)} frames carried it")
+
+    # The failure the width above is really about: a short row does not
+    # break parsing, it moves the gain stamp into somebody else's columns,
+    # and the recording is then scored against whatever calibration happens
+    # to be loaded today.
+    for name, path in (("with telemetry", tele), ("without", plain)):
+        rows = list(csv.DictReader(open(path)))
+        _, stamped = mj.recorded_gains(rows, path)
+        check(f"a recording {name} keeps its gain stamp", stamped)
+        check(f"and its status word lands in sta_* ({name})",
+              rows[0]["sta_pinky"] == ("1" if path == tele else ""))
 
     # The whole print path had never been executed before this test existed.
     for name, path, want in (("without telemetry", plain, "filters x gates"),

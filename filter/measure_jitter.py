@@ -402,6 +402,27 @@ def open_telemetry():
     return c
 
 
+def tele_row(st):
+    """The telemetry half of a row, always `len(TELE_FIELDS)` wide.
+
+    Assembled here rather than inline in `record` so that its width can be
+    asserted without a camera and a daemon. It could not be, and it was
+    wrong: `sta` was added to TELE_FIELDS and to nothing else, so every
+    --telemetry row went out six columns short of its own header. Nothing
+    raises - csv.DictReader just reads the following columns into the
+    wrong names, which put the gain stamp into `sta_*` and left `gain_*`
+    empty, and cost the recording the one thing those columns exist for.
+
+    A daemon too old to report `sta` blanks those six rather than
+    shortening the row.
+    """
+    if not st or st.get("bus") != "up":
+        return [""] * len(TELE_FIELDS)
+    sta = st.get("sta") or [""] * len(AXES)
+    return ([str(v) for v in st["ang"]] + [str(v) for v in st["cur"]]
+            + [str(v) for v in sta])
+
+
 def record(args):
     import cv2
     import mediapipe as mp
@@ -455,16 +476,13 @@ def record(args):
                        + [f"{c:.3f}" for c in curls]
                        + [f"{tf['flexion']:.3f}", f"{tf['opposition']:.3f}"])
                 seen += 1
-            tele_row = [""] * len(TELE_FIELDS)
+            tr = [""] * len(TELE_FIELDS)
             if tele is not None:
                 try:
-                    st = tele.state()
-                    if st.get("bus") == "up":
-                        tele_row = ([str(v) for v in st["ang"]]
-                                    + [str(v) for v in st["cur"]])
+                    tr = tele_row(tele.state())
                 except Exception:              # noqa: BLE001
                     pass    # a telemetry gap must not end a 20 s recording
-            w.writerow(row + tele_row + gain_row)
+            w.writerow(row + tr + gain_row)
             if not args.no_window:
                 left = args.seconds - t
                 cv2.putText(frame, f"HOLD STILL  {left:4.1f}s",

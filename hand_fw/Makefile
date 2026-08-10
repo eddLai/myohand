@@ -41,7 +41,16 @@ hand_ctl: hand_ctl.c hand_safety.c hand_safety.h hand_collision_table.h $(BUILD)
 handd: handd.c hand_safety.c hand_safety.h hand_collision_table.h $(BUILD)/libsoem.a
 	gcc $(CFLAGS) -I . handd.c hand_safety.c -o handd $(LDLIBS)
 
-hand_set: soem_build/hand_set.c hand_safety.c hand_safety.h hand_collision_table.h $(BUILD)/libsoem.a
+# The file produced is soem_build/hand_set, so that is what the rule has to
+# be named. A target called `hand_set` never appears on disk, so make never
+# finds it and runs the recipe on every single build - and because setcap
+# lives on the inode, every one of those quietly drops the binary's
+# capabilities. Being declared .PHONY made that permanent rather than a bug:
+# `make all` could never be a no-op, so "rebuild only if something changed"
+# was not advice anyone could follow. `hand_set` stays as an alias.
+hand_set: soem_build/hand_set
+
+soem_build/hand_set: soem_build/hand_set.c hand_safety.c hand_safety.h hand_collision_table.h $(BUILD)/libsoem.a
 	gcc $(CFLAGS) -I . soem_build/hand_set.c hand_safety.c -o soem_build/hand_set $(LDLIBS)
 
 # Enumeration + the persistent-OP/DC probe. Kept out of `all` because they

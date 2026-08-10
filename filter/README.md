@@ -17,7 +17,7 @@
     DISPLAY=:1 ./run_teleop.sh --device 0
 
 `run_teleop.sh` 會自己找直譯器、自己接上已經在跑的 `handd`。**handd 沒在跑**
-的話加 `--iface=eno1`，它會順便起一個、結束時再收掉。
+的話加 `--iface=enp17s0`，它會順便起一個、結束時再收掉。
 
 視窗開了之後：
 

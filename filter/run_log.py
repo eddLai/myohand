@@ -23,7 +23,9 @@ afternoon's settings and nothing else.
 `sent_*` is stored anyway, and it is not redundant: replaying the raw
 through the shipped filter has to reproduce it, and summary.txt checks that
 it does. Nothing else would catch this file quietly drifting out of step
-with the code it claims to be recording.
+with the code it claims to be recording. Anything the replay needs in order
+to reproduce a frame is therefore a column and not a line in meta.json:
+that is what `deg` is, the deadband being a live slider.
 
 Frames are logged at whatever rate the camera manages, never resampled. The
 variation in dt is data - it is what drives one-euro's alpha and the whole
@@ -60,7 +62,21 @@ FINGERS = hf.FINGERS
 #: `applying` is handd's own stuck detector. Without it, a run where the
 #: slave stopped consuming process data is indistinguishable from a
 #: mechanism that absorbed every command.
-RUN_FIELDS = ([f"sent_{a}" for a in AXES] + ["sent", "mode", "applying"])
+#:
+#: `deg` is the deadband tolerance in force ON THIS FRAME, and it is a
+#: column rather than a line in meta.json because the operator can move it
+#: while the run is flying - the UI has a slider and the manual tells them
+#: to use it. Recorded once at the top, the replay rebuilds the run with a
+#: threshold the filter stopped using at frame 450, and the check reports
+#: DOES NOT MATCH about a run in which nothing was wrong.
+#:
+#: This one is NOT a cut, unlike a calibration or a camera change. Moving
+#: the slider clears no state - the filter's memory runs straight through
+#: it and only a threshold changes - so the run stays whole and the replay
+#: follows the column. Cutting is the instrument for state that broke, and
+#: pointing it at an ordinary knob would shred a run into fragments.
+RUN_FIELDS = ([f"sent_{a}" for a in AXES] + ["sent", "mode", "applying",
+                                             "deg"])
 
 FIELDS = mj.MAP_FIELDS + mj.TELE_FIELDS + mj.GAIN_FIELDS + RUN_FIELDS
 
@@ -124,8 +140,15 @@ class RunLog:
         return cls(path, meta)
 
     def frame(self, t, seen, raw=None, sent=None, was_sent=False,
-              mode="on", trust=True, why="", feats=None, tele=None):
-        """One camera frame. `raw` is the mapping output before any filter."""
+              mode="on", trust=True, why="", feats=None, tele=None,
+              deg=None):
+        """One camera frame. `raw` is the mapping output before any filter.
+
+        `deg` is the deadband tolerance the filter was carrying for this
+        frame. Left out, the column is blank and the replay falls back to
+        meta's single value - which is what every log written before this
+        column existed says, and the right reading of it.
+        """
         self.n += 1
         if self.t_first is None:
             self.t_first = t
@@ -153,9 +176,13 @@ class RunLog:
         row += self._gain_row
         row += ([f"{v:.4f}" for v in sent] if sent is not None
                 else [""] * len(AXES))
+        # Four decimals is exact for this one: the slider is a 0.1 ladder,
+        # so every value it can produce survives the round trip unchanged,
+        # and the threshold the replay rebuilds is the threshold that flew.
         row += [1 if was_sent else 0, mode,
                 "" if not tele or tele.get("applying") is None
-                else (1 if tele["applying"] else 0)]
+                else (1 if tele["applying"] else 0),
+                "" if deg is None else f"{deg:.4f}"]
         self.sends += 1 if was_sent else 0
         self._w.writerow(row)
         self._fh.flush()
@@ -195,6 +222,13 @@ def summarise(path, skip=0.0):
     out = []
     a = out.append
 
+    # The deadband the run opened with, and what it actually ran at. meta
+    # holds one value because it is written once; the column holds the rest.
+    # A log from before the column falls back to meta, which is the whole
+    # truth for it - there was no way to move the slider and record it.
+    deg0 = (meta.get("filter") or {}).get("deg", hf.DEADBAND_DEG)
+    degs = sorted({float(r["deg"]) for r in rows if r.get("deg")})
+
     a(f"run           {meta.get('started', os.path.basename(path))}")
     a(f"commit        {meta.get('git_commit') or '(unknown)'}")
     a(f"host          {meta.get('host', '?')}")
@@ -202,8 +236,10 @@ def summarise(path, skip=0.0):
         a(f"calibration   {meta['calibration']}")
     if meta.get("filter"):
         f = meta["filter"]
+        band = (f"{degs[0]:g}-{degs[-1]:g} deg (the slider moved during the"
+                f" run)" if len(degs) > 1 else f"{f.get('deg')} deg")
         a(f"filter        one-euro fc={f.get('mincutoff')} beta={f.get('beta')}"
-          f" dcutoff={f.get('dcutoff')}, deadband={f.get('deg')} deg,"
+          f" dcutoff={f.get('dcutoff')}, deadband={band},"
           f" dt<={f.get('dt_max')}s")
     if meta.get("sink"):
         a(f"sink          {meta['sink']}")
@@ -242,12 +278,17 @@ def summarise(path, skip=0.0):
     # the check below is what earns the right to do that.
     gains = {x: float(rows[0].get(f"gain_{x}") or 0) or mj.gains()[x]
              for x in AXES}
-    filt = hf.HandFilter(gains, deg=(meta.get("filter") or {}).get("deg", 1.5))
+    filt = hf.HandFilter(gains, deg=deg0)
     on, last = [], None
     for r, v in zip(rows, raw):
         vv = list(v)
         if r["trust"] != "1":
             vv[4] = vv[5] = hf.HOLD
+        # Per frame, exactly where teleop does it: the operator can move
+        # the deadband slider mid-run, and a replay holding the value the
+        # log opened with rebuilds a filter that stopped flying at the
+        # moment they touched it.
+        filt.set_deadband_deg(float(r.get("deg") or deg0))
         got = filt.update(vv, float(r["t"]))
         if got is not None:
             last = got

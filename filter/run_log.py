@@ -271,7 +271,6 @@ def summarise(path, skip=0.0):
     a(f"filter        {which}")
 
     raw = [[float(r[f"tgt_{x}"]) for x in AXES] for r in rows]
-    on_rows = [r for r in rows if r["mode"] == "on"]
 
     # What each path commands, over the same frames. ON is replayed rather
     # than read from sent_* so that both columns are produced the same way;
@@ -312,32 +311,46 @@ def summarise(path, skip=0.0):
     # Does replaying the raw reproduce what was actually sent? If not, this
     # file is not a record of the run it claims to describe, and every
     # number above is about something else.
-    if on_rows:
-        worst, n_cmp, n_off = 0.0, 0, 0
-        for r, v in zip(rows, on):
-            if r["mode"] != "on" or not r[f"sent_{AXES[0]}"]:
-                continue
-            n_cmp += 1
-            d = max(abs(float(r[f"sent_{x}"]) - v[i])
-                    for i, x in enumerate(AXES))
-            worst = max(worst, d)
-            n_off += 1 if d > 0.5 else 0
+    #
+    # Every frame with a filter output recorded, not just the ones flown
+    # with the filter in circuit. teleop calls filt.update() unconditionally
+    # - the filter keeps running while it is bypassed - and logs its output
+    # either way, so the data was always there and skipping it left a run
+    # flown entirely on `f` with no check performed on it at all.
+    worst, n_cmp, n_bad, n_byp = 0.0, 0, 0, 0
+    for r, v in zip(rows, on):
+        if not r[f"sent_{AXES[0]}"]:
+            continue
+        n_cmp += 1
+        n_byp += 1 if r["mode"] != "on" else 0
+        d = max(abs(float(r[f"sent_{x}"]) - v[i])
+                for i, x in enumerate(AXES))
+        worst = max(worst, d)
+        n_bad += 1 if d > 0.5 else 0
+    if n_cmp:
         a("")
-        if n_cmp:
-            # The gate is a threshold, so a sample sitting exactly on it can
-            # fall either way once it has been through a text file, and the
-            # staircase then differs by one whole step - which is why a
-            # tolerance on the worst frame alone called an ordinary run
-            # broken. A tie shows up on a few frames. Code that has really
-            # diverged from what flew shows up on most of them.
-            frac = n_off / n_cmp
-            ok = "matches" if frac <= 0.01 else "DOES NOT MATCH"
-            a(f"replay check  {ok} what was sent: {n_cmp - n_off}/{n_cmp} "
-              f"frames identical, worst {worst:.1f} counts")
-            if frac > 0.01:
-                a(f"              {100*frac:.0f}% of frames differ - the numbers")
-                a("              above describe a filter other than the one")
-                a("              this run was flying, so do not trust them")
+        # The gate is a threshold, so a sample sitting exactly on it can
+        # fall either way once it has been through a text file, and the
+        # staircase then differs by one whole step - which is why a
+        # tolerance on the worst frame alone called an ordinary run
+        # broken. A tie shows up on a few frames. Code that has really
+        # diverged from what flew shows up on most of them.
+        frac = n_bad / n_cmp
+        ok = "matches" if frac <= 0.01 else "DOES NOT MATCH"
+        a(f"replay check  {ok} what was sent: {n_cmp - n_bad}/{n_cmp} "
+          f"frames identical, worst {worst:.1f} counts")
+        if n_byp:
+            # Worth saying plainly: on a bypassed frame the filter's output
+            # never reached the hand, so the check is comparing the record
+            # against the code rather than against what flew. It still
+            # catches drift and precision loss; it just claims one step less.
+            a(f"              {n_byp} of those were flown with the filter")
+            a("              bypassed, where this compares the record against")
+            a("              the code, not against what reached the hand")
+        if frac > 0.01:
+            a(f"              {100*frac:.0f}% of frames differ - the numbers")
+            a("              above describe a filter other than the one")
+            a("              this run was flying, so do not trust them")
 
     # The only MEASURED curve in this file.
     #

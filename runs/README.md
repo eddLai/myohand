@@ -21,6 +21,11 @@
 | `summary.txt` | 人看的那份 |
 | `plot.svg` | 圖。衍生物，可以從 `frames.csv` 重生 |
 
+> `meta.json` 的 commit 是**錄的當下**那個 hash，而這條 branch 被 rebase 過兩次。
+> 底下幾份記的 `a5c01a6`、`a354f3f`、`5de84f7`、`4c33240` 因此不在 `git log` 裡，
+> 它們掛在 `archive/pre-rebase-2026-08-07` 與 `archive/pre-rebase-2026-08-10` 兩個
+> tag 底下（都在 origin 上），`git show <hash>` 照樣打得開。
+
 重生 summary 或圖：
 
     cd filter

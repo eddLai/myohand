@@ -37,6 +37,8 @@ OPP_MIN, OPP_MAX = 10.0, 90.0            # thumb opposition sweep; see calibrate
 HANDEDNESS = "Right"       # the operator's hand; calibration locks it in
 FACING_MARGIN = 0.10       # silhouette area below this fraction is edge-on
 LABEL_SURE = 0.85          # handedness score under this means mid-flip
+OPP_LEAK = 0.0             # deg of invented flexion per deg of opposition
+OPP_ONSET = 70.0           # opposition past which the palm hides the thumb
 
 # Robot targets, in ANGLEACT counts (see hand_scale). T_MAX is the top of
 # the scale; T_MIN sits above its bottom on purpose - a teleop source
@@ -242,6 +244,14 @@ def thumb_features(lm, handedness=None):
     The metacarpal is one unit vector, so (opposition, abduction) exhaust its
     freedom; CMC flexion has no third number of its own, it lives inside these
     two. Downstream learners should treat this dict as the separated channels.
+
+    The channels are not as separate as that paragraph claims. Sweeping the
+    thumb across the palm hides it, the net fills the gap from its prior, and
+    the filled-in thumb reads as bent: the same straight thumb measures 47
+    degrees of flexion pointing outward and 82 sweeping across. OPP_LEAK is
+    how much of that is invented per degree of opposition, measured from two
+    held poses of one hand, and defaults to 0 so an uncalibrated profile
+    behaves as before.
     """
     if handedness is None:
         handedness = HANDEDNESS
@@ -255,6 +265,12 @@ def thumb_features(lm, handedness=None):
     t = (t[0] / m, t[1] / m, t[2] / m)
     y, x = _dot(t, n), _dot(t, e1)
     opp = math.degrees(math.atan2(y, x)) if math.hypot(y, x) > 1e-6 else 0.0
+    if OPP_LEAK:
+        # Nothing is subtracted until the thumb has swept far enough to go
+        # behind the palm: up to that point the net can see it and the
+        # reading is honest, and correcting an honest reading is how the
+        # first version of this drove a 31 degree pose down to 7.
+        flex = max(0.0, flex - OPP_LEAK * max(0.0, opp - OPP_ONSET))
     return {"flexion": flex, "abduction": _angle(t, a), "opposition": opp}
 
 

@@ -349,6 +349,36 @@ with tempfile.TemporaryDirectory() as d:
           "DOES NOT MATCH" in blind,
           [ln.strip() for ln in blind.splitlines() if "replay" in ln][0])
 
+    # ---- bypassed frames are checked too --------------------------------
+    #
+    # `f` takes the filter out of the path, but teleop keeps calling
+    # filt.update() every frame and keeps logging its output, so the data
+    # the check needs was always there. While the check skipped mode !=
+    # "on", a run flown entirely on the old path got no check at all.
+    byp = fly(os.path.join(d, "bypassed"), mode="off")
+    btext = open(os.path.join(byp, "summary.txt")).read()
+    check("a run flown with the filter bypassed is still replay-checked",
+          "replay check" in btext and "DOES NOT MATCH" not in btext,
+          [ln.strip() for ln in btext.splitlines() if "replay" in ln][0]
+          if "replay check" in btext else "no replay line was printed")
+    # And it must not overclaim: on those frames the filter's output never
+    # reached the hand, so this compares the record against the code.
+    check("and it says what the check is worth on those frames",
+          "bypassed" in btext and "not against what reached the hand" in btext)
+
+    bypbad = os.path.join(d, "bypassed_tampered")
+    fly(bypbad, mode="off")
+    bp = os.path.join(bypbad, "frames.csv")
+    brs = list(csv.DictReader(open(bp)))
+    for r in brs[120:]:
+        r["sent_ring"] = f"{float(r['sent_ring']) + 40:.1f}"
+    with open(bp, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=run_log.FIELDS)
+        w.writeheader()
+        w.writerows(brs)
+    check("and a bypassed run that disagrees is caught, not waved through",
+          "DOES NOT MATCH" in run_log.summarise(bypbad))
+
     # ---- the plot command is offered, not run --------------------------
     #
     # matplotlib must never be needed to finish a run: the KD240 has 1.9 GB

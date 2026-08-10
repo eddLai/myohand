@@ -235,6 +235,10 @@ def summarise(path, skip=0.0):
     a(f"host          {meta.get('host', '?')}")
     if meta.get("calibration"):
         a(f"calibration   {meta['calibration']}")
+    # why the previous log ended. Absent on the first log of a session, and
+    # on every log written before teleop_app started recording it.
+    if meta.get("opened_after"):
+        a(f"follows       {meta['opened_after']}")
     if meta.get("filter"):
         f = meta["filter"]
         band = (f"{degs[0]:g}-{degs[-1]:g} deg (the slider moved during the"

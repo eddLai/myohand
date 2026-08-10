@@ -276,6 +276,30 @@ check("update always returns six values", len(out) == 6)
 filt.reset()
 check("reset clears the state", filt._out is None and filt.changed is False)
 
+# ...and clears the state only. After a calibration that is not enough:
+# the windows the gains were derived from have just been re-measured, so
+# the table this filter is still holding describes the previous operator's
+# range. On 2026-08-07 that was a finger degree worth 6.04 counts against
+# 4.99, and thumb_rot 7.80 against 4.59 - a filter kept across it gates the
+# noisiest axis at 11.7 counts while the slider says 1.5 degrees, which is
+# 2.55. teleop rebuilds rather than resets for this reason.
+import hand_mapping as hm                                      # noqa: E402
+
+kept = hm.CURL_CLOSED
+built = hf.HandFilter.for_camera(deg=1.5)
+was = dict(built.deadbands)
+hm.CURL_CLOSED = hm.CURL_CLOSED + 40.0        # a wider range, freshly posed
+try:
+    built.reset()
+    check("reset keeps the gains it was built with, calibration or not",
+          built.deadbands == was)
+    check("so only a rebuild picks up a calibration",
+          hf.HandFilter.for_camera(deg=1.5).deadbands != was,
+          f"pinky {was['pinky']:.1f} -> "
+          f"{hf.HandFilter.for_camera(deg=1.5).deadbands['pinky']:.1f} counts")
+finally:
+    hm.CURL_CLOSED = kept
+
 
 print()
 if fails:

@@ -301,12 +301,18 @@ def main():
         sink.deadband = 1
     filt = hand_filter.HandFilter.for_camera(deg=SETTINGS["deadband_deg"])
 
-    runlog = None
-    if not args.no_log:
+    def open_runlog():
+        """A run log carrying the gains and the profile in force right now.
+
+        Called again whenever the filter is rebuilt, so every one of these
+        describes exactly one stretch of continuous filter - see cut_run.
+        """
+        if args.no_log:
+            return None
         root = args.runs or os.path.normpath(os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "runs"))
         try:
-            runlog = run_log.RunLog.open(
+            rl = run_log.RunLog.open(
                 root, gains=hand_filter.camera_gains(),
                 filter_params={"mincutoff": hand_filter.MINCUTOFF,
                                "beta": hand_filter.BETA,
@@ -316,10 +322,14 @@ def main():
                 extra={"sink": sink.name, "device": SETTINGS["device"],
                        "calibration": hm.ACTIVE_PROFILE or "(module defaults)",
                        "rate_hz": args.rate})
-            print(f"run log: {runlog.path}")
+            print(f"run log: {rl.path}")
+            return rl
         except Exception as e:                              # noqa: BLE001
             # A run that cannot be recorded is still a run worth flying.
             print(f"not recording this run ({e})", file=sys.stderr)
+            return None
+
+    runlog = open_runlog()
 
     settle_frames = (args.settle_frames if args.settle_frames is not None
                      else hand_sink.settle_frames_default(sink.name))
@@ -365,6 +375,48 @@ def main():
         frames = seen = 0
         t_start = time.time()
 
+        def cut_run(runlog, why):
+            """End this run, rebuild the filter, and start the next one.
+
+            Both callers below used to call `filt.reset()`, and both were
+            leaving two things behind.
+
+            The run log claims to describe one continuous stretch of
+            filter. It has to: summarise() produces the `filter ON` column
+            by replaying the raw stream through a fresh HandFilter, which
+            is the only way to get it and the OFF column out of the same
+            machinery, and that replay cannot know the live filter was
+            cleared partway. Cutting the run at the clear keeps the claim
+            true, and exactly rather than approximately - a filter that has
+            just been reset and a filter that has just been constructed
+            differ in nothing, so the replay of each piece starts where the
+            live filter did. The alternative, teaching the replay to reset
+            at frame 3172, is a column to maintain for the same answer.
+
+            Rebuilding rather than resetting is the other half. `reset`
+            clears the state and keeps the gains, and a calibration is
+            precisely the event that changes them: after the one on
+            2026-08-07 a finger degree was worth 4.99 counts instead of
+            6.04 and thumb_rot's 4.59 instead of 7.80, so a filter still
+            holding the old table gates the noisiest axis at 11.7 counts
+            where 1.5 degrees now means 6.9 - the operator's stated
+            tolerance delivered as 2.55 degrees. Nothing says so on screen.
+
+            The piece that ends here is written out rather than dropped:
+            frames.csv is on disk already, so closing it costs a meta.json
+            and a summary, and the stretch before a calibration is
+            routinely the one that made the operator ask for it.
+            """
+            if runlog is not None:
+                try:
+                    print(f"\nrun log closed ({why}): {runlog.close()}")
+                except Exception as e:                      # noqa: BLE001
+                    print(f"run log incomplete ({e}) - frames.csv is still"
+                          f" there", file=sys.stderr)
+            return (hand_filter.HandFilter.for_camera(
+                        deg=SETTINGS["deadband_deg"]),
+                    open_runlog())
+
         while not stop:
             if cal_request:
                 # serviced here, not in the click handler: this is the scope
@@ -372,14 +424,18 @@ def main():
                 cal_request = False
                 cap = run_calibration(SETTINGS["device"], open_camera, cap)
                 opened_device, ema = SETTINGS["device"], None
-                filt.reset()      # the camera was gone for a minute, and the
-                # profile it came back with may not be the one the state was
-                # built under - same as a new source, not a dropped frame
+                # the camera was gone for a minute and the profile it came
+                # back with may not be the one the state was built under,
+                # nor the one its gains were
+                filt, runlog = cut_run(runlog, "calibration")
             if SETTINGS["device"] != opened_device:     # follow the settings plate
                 cap.release()
                 cap = open_camera(SETTINGS["device"])
                 opened_device, ema = SETTINGS["device"], None
-                filt.reset()      # new source, not a dropped frame
+                # a new source, not a dropped frame. The gains have not
+                # moved here, but the state has been cleared, and it is the
+                # clearing that the replay cannot follow
+                filt, runlog = cut_run(runlog, "camera changed")
             ok, frame = cap.read()
             if not ok:
                 # a dead camera must not take the panel with it: the hand-side

@@ -42,3 +42,6 @@ hand_fw/*.rar
 # those are evidence and belong in the history. Bare-timestamp runs do not.
 runs/*
 !runs/*_*/
+# ...and the file that explains which of them are kept and why, which the
+# rule above was swallowing along with the churn.
+!runs/README.md

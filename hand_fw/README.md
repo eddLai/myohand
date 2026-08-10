@@ -256,6 +256,30 @@ T1 版的手把觸覺放在 TxPDO 軸狀態後面：**34 個 short = 8 個電容
 `cap` 每次重編都要重跑（sudo 一次）。`hand_set.c` 靠 `-I .` 找到 `hand_safety.h`，
 所以一律用 `make -C hand_fw` 建置。
 
+### `git pull` 之後要不要重建？
+
+**看有沒有動到 C。** Python 那半邊不用建；`pull` 也永遠不會碰到 `soem_build/`——
+那是 gitignore 的 vendor clone，**只有全新 clone 或新 worktree 才要重來一次**
+（見上面「建置」）。
+
+問 make 就好，它自己知道：
+
+    make -C hand_fw all
+
+沒動到 `.c`／`.h` 就會回 `Nothing to be done for 'all'.`，那就沒事了。
+
+**真的有重編才要重下 cap**，而且一定要下：
+
+    make -C hand_fw all && sudo make -C hand_fw cap
+
+理由是 capabilities **掛在 inode 上**，重編出來的是新 inode，舊的那份權限不會
+跟過來。漏掉的話 `handd` 開不了網卡，而它抱怨的方式跟「網卡名字打錯」長得一樣
+（見本檔前面那條），所以會往錯的方向查。
+
+> 2026-08-10 之前這件事沒辦法照做：`hand_set` 的 rule 名字跟它產出的檔案
+> （`soem_build/hand_set`）對不上又被宣告成 `.PHONY`，所以 `make all` **永遠**會
+> 重編它一次、**永遠**洗掉它的 cap，`Nothing to be done` 從來不會出現。已修。
+
 ## 兩條路徑，一套 API
 
 `hand_api.InspireHand` 在 daemon 起著時走 `handd`，沒起時自己生 `hand_ctl`。

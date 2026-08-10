@@ -54,7 +54,7 @@ sudo systemctl enable --now ecat-link.service
 
 **證據**（2026-08-10）：`ip link set enp17s0 up` 之後 `Link detected: yes`，
 `./run_teleop.sh --iface=enp17s0` 進到 `handd: OPERATIONAL` 並錄到真的 ANGLEACT
-與電流（`runs/2026-08-10T15-31-58`）。
+與電流（`runs/2026-08-10T15-31-58_ecat_enp17s0`）。
 
 ### 沒有手也想看
 

@@ -23,7 +23,7 @@ EMG 那半邊還沒有任何程式碼會去呼叫 `hand_fw/`，webcam teleop 也
 `~/myohand-feat-filter-stage`：
 
     cd ~/myohand-feat-filter-stage/teleop
-    DISPLAY=:1 ./run_teleop.sh --device 0        # handd 沒在跑就加 --iface=eno1
+    DISPLAY=:1 ./run_teleop.sh --device 0        # handd 沒在跑就加 --iface=enp17s0
 
 `run_teleop.sh` 自己找直譯器、自己接上已經在跑的 `handd`（沒有就起一個，
 結束時收掉）。視窗開了之後**要按 `A` 或點 SYNC 才會開始跟隨**，`f` 切換
@@ -40,9 +40,9 @@ EMG 那半邊還沒有任何程式碼會去呼叫 `hand_fw/`，webcam teleop 也
 **第一次架這台機器**（或換一台）：
 
     ./setup.sh                                    # venv + SOEM + C binaries + caps（sudo 一次）
-    ECAT_IFACE=eno1 ./hand_fw/hand_ctl state      # 遙測，不會動；先確認手在線上
+    ECAT_IFACE=enp17s0 ./hand_fw/hand_ctl state      # 遙測，不會動；先確認手在線上
 
-網卡名每台不一樣（`.112` 是 `eno1`，`.28` 是 `eno1`，KD240 依線接在哪是
+網卡名每台不一樣（`.112` 是 `enp17s0`，`.28` 是 `eno1`，KD240 依線接在哪是
 `eth0`/`eth1`/`eth2`）——**先用 `ecat_scan` 列出來，不要猜**。
 `hand_ctl` / `hand_set` 讀 `$ECAT_IFACE`（預設 `eth0`），`handd` 用 `--iface=`。
 給錯的話錯誤訊息是 `need CAP_NET_RAW or root`，看起來像權限問題，其實是網卡名。

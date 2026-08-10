@@ -9,7 +9,7 @@
 
 ```bash
 cd ~/myohand/nn && ../venv/bin/python3 thumb_calib_ui.py 0 5 --save=你的名字-YYYYMMDD
-cd ~/myohand/teleop && ./run_teleop.sh --iface=eno1 --profile=你的名字-YYYYMMDD
+cd ~/myohand/teleop && ./run_teleop.sh --iface=enp17s0 --profile=你的名字-YYYYMMDD
 ```
 
 teleop 視窗裡按 **CALIBRATE** 按鈕做的是同一件事，只是名字自動給。
@@ -151,7 +151,7 @@ lite 跑的 teleop——同一幀 `flexion` 中位數差 **~15°**，八段姿�
 所以跑 teleop 一律明講自己的 profile，不要靠 `active`：
 
 ```bash
-./run_teleop.sh --iface=eno1 --profile=你的名字-YYYYMMDD
+./run_teleop.sh --iface=enp17s0 --profile=你的名字-YYYYMMDD
 ```
 
 `HANDEDNESS` 也存在窗裡面。左手要量成 `"Left"`，不是換個窗就行。

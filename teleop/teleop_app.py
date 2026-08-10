@@ -432,6 +432,11 @@ def main():
                 cap.release()
                 cap = open_camera(SETTINGS["device"])
                 opened_device, ema = SETTINGS["device"], None
+                # same reason as in run_calibration: the deadband compares
+                # the next target against last_sent, and a stale one from
+                # the old camera can swallow the first target from the new
+                # one. The hand then sits still while SYNC reads ON.
+                last_sent = None
                 # a new source, not a dropped frame. The gains have not
                 # moved here, but the state has been cleared, and it is the
                 # clearing that the replay cannot follow

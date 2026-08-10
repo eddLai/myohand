@@ -5,7 +5,8 @@
 
 **一次 teleop 可能開不只一個**：按 CALIBRATE 或換相機會把濾波器重建，紀錄就切在
 那裡——一份等於一段連續的濾波器，這樣它才驗得了自己。同一秒切兩次的話後面那個
-會是 `<時間戳>-2`。為什麼要切見 [`../filter/README.md`](../filter/README.md)。
+會是 `<時間戳>-2`。**動 Deadband 滑桿則不切**——它只換門檻、不清狀態，所以逐幀
+記進 `deg` 那一欄，重放照著走。為什麼見 [`../filter/README.md`](../filter/README.md)。
 
 **要留下來的就給它一個描述性的名字**——資料夾名帶底線後綴的會被追蹤：
 
@@ -15,7 +16,7 @@
 
 | 檔案 | 內容 |
 |---|---|
-| `frames.csv` | 每一幀。**這是真相來源**，raw 目標、實際送出、ANGLEACT、電流、STA、增益戳記 |
+| `frames.csv` | 每一幀，50 欄。**這是真相來源**，raw 目標、實際送出、ANGLEACT、電流、STA、增益戳記、當幀的 `deg` |
 | `meta.json` | 濾波參數、校正 profile、git commit、sink |
 | `summary.txt` | 人看的那份 |
 | `plot.svg` | 圖。衍生物，可以從 `frames.csv` 重生 |

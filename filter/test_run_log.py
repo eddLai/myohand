@@ -298,6 +298,57 @@ with tempfile.TemporaryDirectory() as d:
           len(list(csv.DictReader(
               open(os.path.join(first.path, "frames.csv"))))) == 1)
 
+    # ---- the deadband slider is a column, not a line in meta ------------
+    #
+    # teleop_ui carries a 0.5-4.0 degree ladder and teleop applies it every
+    # frame, so the operator can retune the gate while the run is flying -
+    # the manual tells them to. meta.json records one value, taken when the
+    # log opened, so a replay built from that runs the wrong threshold from
+    # the moment the slider moves.
+    #
+    # Cutting the run is the wrong instrument here, unlike a calibration:
+    # moving the slider clears no state, the filter's memory runs straight
+    # through it, and only a threshold changed. So the run stays whole and
+    # the replay follows the column instead.
+
+    def slid(path, frames, at, before=1.5, after=3.0, record_deg=True):
+        """One continuous filter, deadband moved at frame `at`."""
+        log = run_log.RunLog(path, {
+            "started": os.path.basename(path),
+            "gains": {a: OLD for a in AXES},
+            "filter": {"mincutoff": hf.MINCUTOFF, "beta": hf.BETA,
+                       "dcutoff": hf.DCUTOFF, "deg": before,
+                       "dt_max": hf.DT_MAX}})
+        filt, last = hf.HandFilter({a: OLD for a in AXES}, deg=before), None
+        for k, (t, raw) in enumerate(frames):
+            deg = before if k < at else after
+            filt.set_deadband_deg(deg)          # exactly where teleop does it
+            got = filt.update(raw, t)
+            if got is not None:
+                last = got
+            log.frame(t=t, seen=True, raw=raw, sent=last,
+                      was_sent=bool(filt.changed), mode="on", trust=True,
+                      deg=deg if record_deg else None)
+        return log.close()
+
+    slider = open(os.path.join(slid(os.path.join(d, "slider"), fl, CUT),
+                               "summary.txt")).read()
+    check("a run whose deadband slider moved still replays cleanly",
+          "DOES NOT MATCH" not in slider,
+          [ln.strip() for ln in slider.splitlines() if "replay" in ln][0])
+    check("and the header reports the range it ran at, not just the first",
+          "1.5-3 deg" in slider and "slider moved" in slider,
+          [ln for ln in slider.splitlines()
+           if ln.startswith("filter  ") and "deadband" in ln][0].strip())
+
+    # Both halves, as with the calibration cut: the column is only worth a
+    # column if the log that lacks it really does fail.
+    blind = open(os.path.join(slid(os.path.join(d, "slider_blind"), fl, CUT,
+                                   record_deg=False), "summary.txt")).read()
+    check("and a log that did not record the slider cannot replay itself",
+          "DOES NOT MATCH" in blind,
+          [ln.strip() for ln in blind.splitlines() if "replay" in ln][0])
+
     # ---- the plot command is offered, not run --------------------------
     #
     # matplotlib must never be needed to finish a run: the KD240 has 1.9 GB

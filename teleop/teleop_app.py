@@ -464,6 +464,12 @@ def main():
             tgt = None
             raw_log = None
             feats_log = None
+            # Read the slider ONCE per frame, and log the value that was
+            # applied rather than re-reading the setting further down. The
+            # replay has to rebuild this frame with the threshold this frame
+            # flew, and a second read is a second chance to disagree - the
+            # same mistake as the two time.time() calls above.
+            deg_frame = SETTINGS["deadband_deg"]
 
             trust, why = True, ""
             if res and res.multi_hand_landmarks and res.multi_hand_world_landmarks:
@@ -495,7 +501,7 @@ def main():
                     # back in as data decays into the estimate and quietly
                     # becomes a command of its own.
                     raw[4] = raw[5] = hand_filter.HOLD
-                filt.set_deadband_deg(SETTINGS["deadband_deg"])
+                filt.set_deadband_deg(deg_frame)
                 ema = filt.update(raw, t_frame)
                 # How far the filter still is from the raw signal, which is
                 # what "settling" meant when this was an EMA. Held axes are
@@ -604,7 +610,8 @@ def main():
                              raw=raw_log, sent=ema if raw_log is not None else None,
                              was_sent=just_sent,
                              mode="on" if use_filter else "off",
-                             trust=trust, why=why, feats=feats_log, tele=tele)
+                             trust=trust, why=why, feats=feats_log, tele=tele,
+                             deg=deg_frame)
 
             if args.max_frames and frames >= args.max_frames:
                 break

@@ -96,11 +96,24 @@ class RunLog:
 
     @classmethod
     def open(cls, root, gains, filter_params, extra=None, stamp=None):
-        """A directory named for when the run started, under `root`."""
+        """A directory named for when the run started, under `root`.
+
+        One teleop session can open several of these: the filter is rebuilt
+        when a calibration changes the windows its gains came from, and a
+        run log describes one continuous stretch of filter, so it is cut
+        there. A calibration takes most of a minute and cannot collide, but
+        a camera change is also a cut and two of those inside one second
+        would otherwise land on the same directory and truncate the first
+        one's frames.csv.
+        """
         import time
-        stamp = stamp or time.strftime("%Y-%m-%dT%H-%M-%S")
+        base = stamp or time.strftime("%Y-%m-%dT%H-%M-%S")
+        path, n = os.path.join(root, base), 1
+        while os.path.exists(os.path.join(path, "frames.csv")):
+            n += 1
+            path = os.path.join(root, f"{base}-{n}")
         meta = {
-            "started": stamp,
+            "started": os.path.basename(path),
             "git_commit": _git_commit(),
             "host": os.uname().nodename,
             "argv": sys.argv,
@@ -108,7 +121,7 @@ class RunLog:
             "filter": filter_params,
         }
         meta.update(extra or {})
-        return cls(os.path.join(root, stamp), meta)
+        return cls(path, meta)
 
     def frame(self, t, seen, raw=None, sent=None, was_sent=False,
               mode="on", trust=True, why="", feats=None, tele=None):

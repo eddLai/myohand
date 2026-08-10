@@ -213,6 +213,91 @@ with tempfile.TemporaryDirectory() as d:
           "what the hand actually did"
           not in open(os.path.join(no_tele, "summary.txt")).read())
 
+    # ---- one log, one continuous filter ---------------------------------
+    #
+    # The live filter is cleared when the camera comes back from a
+    # calibration, and the replay behind the `filter ON` column cannot know
+    # that: it runs one filter from the first frame to the last. So a log
+    # spanning a calibration is one the summary cannot reproduce, and
+    # teleop cuts the run there instead.
+    #
+    # Both halves of that are asserted, because the split is only worth
+    # anything if the unsplit version really does fail. Split the wrong
+    # way - anywhere the live filter did NOT restart - and this same check
+    # fails, which is the property being bought.
+
+    def flight(n=900, t0=1786097111.7934, seed=17):
+        r = random.Random(seed)
+        return [(t0 + k / 30.0,
+                 [1500 + 300 * (k // 90 % 2) + r.gauss(0, 11) for _ in AXES])
+                for k in range(n)]
+
+    def flown(path, frames, gain, reset_at=None):
+        """Fly `frames` through a filter built with `gain`, into one log."""
+        log = run_log.RunLog(path, {
+            "started": os.path.basename(path),
+            "gains": {a: gain for a in AXES},
+            "filter": {"mincutoff": hf.MINCUTOFF, "beta": hf.BETA,
+                       "dcutoff": hf.DCUTOFF, "deg": 1.5,
+                       "dt_max": hf.DT_MAX}})
+        filt, last = hf.HandFilter({a: gain for a in AXES}, deg=1.5), None
+        for k, (t, raw) in enumerate(frames):
+            if k == reset_at:
+                filt.reset()
+            got = filt.update(raw, t)
+            if got is not None:
+                last = got
+            log.frame(t=t, seen=True, raw=raw, sent=last,
+                      was_sent=bool(filt.changed), mode="on", trust=True)
+        return log.close()
+
+    CUT = 450
+    OLD, NEW = 6.04, 4.99          # what the 2026-08-07 calibration did
+    fl = flight()
+
+    spanning = open(os.path.join(flown(os.path.join(d, "spanning"), fl, OLD,
+                                       reset_at=CUT), "summary.txt")).read()
+    check("a log that spans a filter reset cannot replay itself",
+          "DOES NOT MATCH" in spanning,
+          [ln.strip() for ln in spanning.splitlines() if "replay" in ln][0])
+
+    before_cal = flown(os.path.join(d, "before_cal"), fl[:CUT], OLD)
+    after_cal = flown(os.path.join(d, "after_cal"), fl[CUT:], NEW)
+    for name, piece in (("before", before_cal), ("after", after_cal)):
+        txt = open(os.path.join(piece, "summary.txt")).read()
+        check(f"the same frames, cut at the reset, replay cleanly ({name})",
+              "matches" in txt and "DOES NOT MATCH" not in txt,
+              [ln.strip() for ln in txt.splitlines() if "replay" in ln][0])
+
+    # And the piece flown after a calibration has to carry that
+    # calibration's gains, not the ones the session opened with: the
+    # deadband is `deg * gain`, so a stale table gates the noisiest axis at
+    # 11.7 counts where 1.5 degrees now means 6.9.
+    after_rows = list(csv.DictReader(open(os.path.join(after_cal,
+                                                       "frames.csv"))))
+    check("and the piece after it is stamped with the new gains",
+          abs(float(after_rows[0]["gain_pinky"]) - NEW) < 1e-6,
+          f"{after_rows[0]['gain_pinky']} against the old {OLD}")
+
+    # Directories are named for the second the piece started, and a session
+    # now opens more than one. A camera change is also a cut, and two of
+    # those inside one second would open the same directory - the second
+    # RunLog truncating the first one's frames.csv on the way in.
+    gp = {a: OLD for a in AXES}
+    fp = {"mincutoff": hf.MINCUTOFF, "beta": hf.BETA, "dcutoff": hf.DCUTOFF,
+          "deg": 1.5, "dt_max": hf.DT_MAX}
+    first = run_log.RunLog.open(d, gp, fp, stamp="one-second")
+    first.frame(t=1786097111.0, seen=True, raw=[1500.0] * 6,
+                sent=[1500.0] * 6, was_sent=True)
+    first.close()
+    second = run_log.RunLog.open(d, gp, fp, stamp="one-second")
+    check("two pieces cut in the same second get separate directories",
+          second.path != first.path, os.path.basename(second.path))
+    second.close()
+    check("and the earlier one still has its frames",
+          len(list(csv.DictReader(
+              open(os.path.join(first.path, "frames.csv"))))) == 1)
+
     # ---- the plot command is offered, not run --------------------------
     #
     # matplotlib must never be needed to finish a run: the KD240 has 1.9 GB

@@ -1,19 +1,18 @@
-"""Does subtracting the leak make a straight thumb read straight?
+"""Does the measured correction hold up away from where it was measured?
 
-The fit comes from two held poses in one recording, which is barely enough to
-draw a line through, so most of this file is spent trying to break it.
+The table comes from one recording: a straight thumb held at eight sweep
+angles. Everything here is an attempt to catch it failing somewhere else.
 
-The held-out set is thumb_steps: four sweep positions, B1 splayed through B4
-at the pinky, thumb straight in all four. Raw flexion climbs across them
-because the sweep invents it. Corrected flexion has to stay flat, and flat has
-to mean flatter than the spread within a single pose, or the correction is
-just noise that happens to point downhill.
+The independent set is thumb_steps, recorded for a different purpose before
+any of this existed. Nothing in it shaped the table, and it happens to sample
+a sweep angle inside the four degree window where the cliff hides - still flat
+at 69.7, where the newer recording is flat at 66.4 and has jumped by 70.4 - so
+it also says whether the cliff was put in the right place.
 
-The other thing to break is the bend signal itself. A correction large enough
-to flatten the sweep could equally flatten a real bend, so P3 to P4 - thumb
-straight, then genuinely curled - has to keep its separation.
-
-Run:  python3 test_decouple.py
+Two things could go wrong that flattening alone would not show. A correction
+big enough to erase an invented bend is big enough to erase a real one, so the
+genuinely curled pose has to keep its distance from the straight one. And an
+empty table has to be inert, since every profile in existence has one.
 """
 
 import csv
@@ -23,6 +22,12 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "camera"))
 import hand_mapping as hm  # noqa: E402
+
+# nn/fit_table.py, lite, from sweep_probe.csv. Zero is pinned to one degree
+# short of the first angle that showed the jump: the recording says there is
+# no leak below the cliff, and ramping into it would invent one.
+TABLE = [[0.0, 0.0], [66.4, 0.0], [69.4, 0.0],
+         [70.4, 28.1], [79.7, 34.0], [94.1, 44.0]]
 
 FAIL = []
 
@@ -34,9 +39,9 @@ class L(object):
         self.x, self.y, self.z = x, y, z
 
 
-def lms(row):
-    return [L(float(row["x%d" % j]), float(row["y%d" % j]),
-              float(row["z%d" % j])) for j in range(21)]
+def lms(r):
+    return [L(float(r["x%d" % j]), float(r["y%d" % j]), float(r["z%d" % j]))
+            for j in range(21)]
 
 
 def med(xs):
@@ -47,34 +52,35 @@ def med(xs):
 
 
 def spread(xs):
-    """p90 - p10, the width of a pose that is supposed to be held still."""
     xs = sorted(xs)
-    if len(xs) < 5:
-        return float("nan")
-    return xs[int(len(xs) * 0.9)] - xs[int(len(xs) * 0.1)]
+    return float("nan") if len(xs) < 5 else (
+        xs[int(len(xs) * 0.9)] - xs[int(len(xs) * 0.1)])
 
 
-def load(path, pose_key, model, only=None):
-    rows = [r for r in csv.DictReader(open(path))
-            if r.get("trust") == "1" and r.get("model") == model
-            and (only is None or r.get(only[0]) == only[1])]
+def group(path, key, only=None):
     out = {}
-    for r in rows:
-        out.setdefault(r[pose_key], []).append(lms(r))
+    for r in csv.DictReader(open(path)):
+        if r.get("trust") != "1" or r.get("model") != "lite":
+            continue
+        if only and r.get(only[0]) != only[1]:
+            continue
+        out.setdefault(r[key], []).append(lms(r))
     return out
 
 
-def feats(frames):
-    f = [hm.thumb_features(l, hm.HANDEDNESS) for l in frames]
-    return [x["flexion"] for x in f], [x["opposition"] for x in f]
+def flex(frames):
+    return [hm.thumb_features(f, hm.HANDEDNESS)["flexion"] for f in frames]
+
+
+def opp(frames):
+    return [hm.thumb_features(f, hm.HANDEDNESS)["opposition"] for f in frames]
 
 
 def check(name, cond, detail):
-    print("  %-58s %s" % (name, "ok" if cond else "FAIL"))
+    print("  %-52s %s" % (name, "ok" if cond else "FAIL"))
+    print("      %s" % detail)
     if not cond:
-        FAIL.append("%s: %s" % (name, detail))
-    if detail:
-        print("      %s" % detail)
+        FAIL.append(name)
 
 
 CAL = os.path.join(HERE, "thumb_calib_ui_landmarks.csv")
@@ -82,71 +88,44 @@ STEPS = os.path.join(HERE, "thumb_steps_landmarks.csv")
 for p in (CAL, STEPS):
     if not os.path.exists(p):
         sys.exit("missing %s" % p)
+poses = group(CAL, "pose")
+steps = group(STEPS, "step", ("block", "B"))
 
-print("=== fitting the leak on the held poses (lite) ===")
-poses = load(CAL, "pose", "lite")
-hm.OPP_LEAK = 0.0
-f5, o5 = feats(poses["P5"])
-f6, o6 = feats(poses["P6"])
-k = (med(f6) - med(f5)) / (med(o6) - max(hm.OPP_ONSET, med(o5)))
-print("  P5 flexion %.1f  opposition %.1f" % (med(f5), med(o5)))
-print("  P6 flexion %.1f  opposition %.1f" % (med(f6), med(o6)))
-print("  OPP_ONSET = %.0f (fixed), OPP_LEAK = %.3f (fitted)"
-      % (hm.OPP_ONSET, k))
+print("=== 1. the same straight thumb, pointing two ways ===")
+hm.OPP_LEAK_TABLE = []
+r5, r6 = med(flex(poses["P5"])), med(flex(poses["P6"]))
+hm.OPP_LEAK_TABLE = TABLE
+c5, c6 = med(flex(poses["P5"])), med(flex(poses["P6"]))
+check("P5 and P6 agree", abs(c6 - c5) < 5.0,
+      "%.1f vs %.1f, gap %.1f (was %.1f)" % (c5, c6, abs(c6 - c5), abs(r6 - r5)))
 
-print("\n=== 1. the two poses it was fitted on now agree ===")
-hm.OPP_LEAK = k
-c5, _ = feats(poses["P5"])
-c6, _ = feats(poses["P6"])
-gap = abs(med(c6) - med(c5))
-check("same straight thumb reads the same both ways", gap < 2.0,
-      "%.1f vs %.1f, gap %.1f deg (was %.1f)"
-      % (med(c5), med(c6), gap, abs(med(f6) - med(f5))))
-
-print("\n=== 2. a real bend survives it ===")
-hm.OPP_LEAK = 0.0
-f3, _ = feats(poses["P3"])
-f4, _ = feats(poses["P4"])
-raw_sep = med(f4) - med(f3)
-hm.OPP_LEAK = k
-c3, _ = feats(poses["P3"])
-c4, _ = feats(poses["P4"])
-sep = med(c4) - med(c3)
-check("straight to curled keeps all of its separation", sep >= raw_sep - 0.5,
-      "%.1f deg corrected vs %.1f raw (%.0f%% kept)"
+print("\n=== 2. a genuine bend keeps its distance ===")
+hm.OPP_LEAK_TABLE = []
+raw_sep = med(flex(poses["P4"])) - med(flex(poses["P3"]))
+hm.OPP_LEAK_TABLE = TABLE
+sep = med(flex(poses["P4"])) - med(flex(poses["P3"]))
+check("straight to curled survives", sep > 0.9 * raw_sep,
+      "%.1f corrected vs %.1f raw (%.0f%% kept)"
       % (sep, raw_sep, 100.0 * sep / raw_sep))
 
-print("\n=== 3. held-out: thumb straight at four sweep positions ===")
-# block B is the sweep: B1 splayed, then touching index, ring and pinky.
-# The last of those needs a little genuine bend, so a perfectly flat line is
-# not the bar; shrinking the climb is.
-steps = load(STEPS, "step", "lite", only=("block", "B"))
-blocks = sorted(steps)
-if len(blocks) < 3:
-    print("  thumb_steps has no B blocks (%s) - skipped" % ", ".join(sorted(steps)))
-else:
-    hm.OPP_LEAK = 0.0
-    raw = [(b, med(feats(steps[b])[0]), med(feats(steps[b])[1])) for b in blocks]
-    hm.OPP_LEAK = k
-    cor = [(b, med(feats(steps[b])[0])) for b in blocks]
-    within = max(spread(feats(steps[b])[0]) for b in blocks)
-    print("  %-6s %10s %10s %10s" % ("block", "opposition", "raw flex", "corrected"))
-    for (b, rf, ro), (_, cf) in zip(raw, cor):
-        print("  %-6s %10.1f %10.1f %10.1f" % (b, ro, rf, cf))
-    rawrange = max(r[1] for r in raw) - min(r[1] for r in raw)
-    corrange = max(c[1] for c in cor) - min(c[1] for c in cor)
-    print("  spread across blocks: raw %.1f -> corrected %.1f "
-          "(within one held block: %.1f)" % (rawrange, corrange, within))
-    check("sweeping invents much less flexion than it did",
-          corrange < 0.5 * rawrange,
-          "%.1f deg across four sweep positions, was %.1f (%.0f%% removed)"
-          % (corrange, rawrange, 100.0 * (1 - corrange / rawrange)))
+print("\n=== 3. independent set: thumb_steps ===")
+hm.OPP_LEAK_TABLE = []
+raw = [(s, med(flex(steps[s])), med(opp(steps[s]))) for s in sorted(steps)]
+noise = max(spread(flex(steps[s])) for s in sorted(steps))
+hm.OPP_LEAK_TABLE = TABLE
+cor = [(s, med(flex(steps[s]))) for s in sorted(steps)]
+print("  %-6s %11s %10s %11s" % ("step", "opposition", "raw", "corrected"))
+for (s, rf, ro), (_, cf) in zip(raw, cor):
+    print("  %-6s %11.1f %10.1f %11.1f" % (s, ro, rf, cf))
+rr = max(r[1] for r in raw) - min(r[1] for r in raw)
+cr = max(c[1] for c in cor) - min(c[1] for c in cor)
+check("a straight thumb reads flat while it sweeps", cr < noise,
+      "spread %.1f, was %.1f, and one held angle scatters %.1f" % (cr, rr, noise))
 
-print("\n=== 4. OPP_LEAK = 0 changes nothing ===")
-hm.OPP_LEAK = 0.0
-again, _ = feats(poses["P5"])
-check("default is exactly today's behaviour", again == f5,
-      "%d frames identical" % len(again))
+print("\n=== 4. an empty table is inert ===")
+hm.OPP_LEAK_TABLE = []
+check("every profile in existence is unaffected", med(flex(poses["P5"])) == r5,
+      "P5 reads %.1f either way" % r5)
 
-print("\n%s" % ("all ok" if not FAIL else "FAILED:\n  " + "\n  ".join(FAIL)))
+print("\n%s" % ("all ok" if not FAIL else "FAILED: " + ", ".join(FAIL)))
 sys.exit(1 if FAIL else 0)

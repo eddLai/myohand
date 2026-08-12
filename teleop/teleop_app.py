@@ -245,6 +245,13 @@ def build_parser():
     ap.add_argument("--headless", action="store_true",
                     help="run the camera, mapping and sink with no window. "
                          "The whole vision chain over SSH, no display needed.")
+    ap.add_argument("--direct", action="store_true",
+                    help="run the palm and landmark models directly instead of "
+                         "through mp.solutions.hands. Lets the thread count be "
+                         "set, which is worth 2.4x on the KD240.")
+    ap.add_argument("--threads", type=int, default=4,
+                    help="inference threads for --direct. MediaPipe pins this "
+                         "to 1 and offers no way to change it.")
     ap.add_argument("--max-frames", type=int, default=0,
                     help="stop after N frames and print a summary; 0 = run "
                          "until q")
@@ -294,9 +301,14 @@ def main():
         cap = open_camera(SETTINGS["device"])
         opened_device = SETTINGS["device"]
         cam_try = time.time()
-        hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
-                                         min_detection_confidence=0.6,
-                                         min_tracking_confidence=0.5)
+        if args.direct:
+            import hand_pipeline
+            hands = hand_pipeline.MediaPipeHands(threads=args.threads)
+            print("vision: direct pipeline, %d threads" % args.threads)
+        else:
+            hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
+                                             min_detection_confidence=0.6,
+                                             min_tracking_confidence=0.5)
         draw, styles = mp.solutions.drawing_utils, mp.solutions.drawing_styles
         win = "RH56F1 Hand Teleop"
         if not args.headless:

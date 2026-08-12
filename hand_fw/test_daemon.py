@@ -112,6 +112,11 @@ def main():
         st = hand.state()
         check("state reports six axes of telemetry",
               all(len(st[k]) == 6 for k in ("pos", "ang", "cur", "sta", "tmp")))
+        check("state carries the 34-field touch block",
+              len(st.get("tac") or []) == 34, str(st.get("tac")))
+        check("the touch block arrives in wire order",
+              st["tac"][0] == 100 and st["tac"][5] == 201,
+              str(st.get("tac")))
         check("the wake sequence cleared standby before serving clients",
               7 not in st["sta"], str(st.get("sta")))
 

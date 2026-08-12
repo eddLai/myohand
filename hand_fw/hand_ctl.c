@@ -198,7 +198,21 @@ int main(int argc, char **argv)
    jarr("cur", &in[18], 6, 0);
    jarr("err", &in[24], 6, 0);
    jarr("sta", &in[30], 6, 0);
-   jarr("tmp", &in[36], 6, 1);
+   /* T1 hands stream 34 shorts of touch sensing after the axis block:
+      8 capacitive modules x 4 quantities + 2 unnamed fields. Field order
+      is not yet calibrated against the real hand; this only hands the
+      raw block to the caller. Absent (null) on a hand without T1, whose
+      input image stops short of it. */
+   if (ctx.slavelist[1].Ibytes >= (42 + 34) * 2)
+   {
+      jarr("tmp", &in[36], 6, 0);
+      jarr("tac", &in[42], 34, 1);
+   }
+   else
+   {
+      jarr("tmp", &in[36], 6, 0);
+      printf("\"tac\":null");
+   }
    printf("}\n");
    ecx_close(&ctx);
    hs_unlock(lock_fd);

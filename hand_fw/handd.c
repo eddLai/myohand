@@ -105,6 +105,17 @@
 #define IN_ERR 24
 #define IN_STA 30
 #define IN_TMP 36
+/* The T1 build streams its touch sensing after the six-axis telemetry:
+   34 shorts for 8 capacitive modules (4 fingertips + thumb tip + 3 palm
+   zones) x 4 quantities (normal force, tangential force, tangential
+   direction, proximity) + 2 fields the datasheet does not name. Which
+   field is which module/quantity is still uncalibrated against the real
+   hand - these offsets only say where the block lives, not what order
+   it is in. A hand without the T1 option maps a shorter input image and
+   the block simply is not there, so its presence is probed per-bringup
+   (have_tac), never assumed. */
+#define IN_TAC   42
+#define IN_TAC_N 34
 
 #define MAX_CLIENTS 8
 #define CLIENT_BUF  1024
@@ -158,8 +169,9 @@ static ecx_contextt ctx;
 static uint8 IOmap[4096];
 static int16_t *in, *out;      /* point at the PDO buffers, or at the sim */
 static int bus_up;
+static int have_tac;           /* the input image reaches past IN_TAC */
 
-static int16_t sim_in[64], sim_out[64];
+static int16_t sim_in[96], sim_out[64];
 static int32_t sim_ang_milli[6];   /* sub-count position, so slow moves move */
 static int sim_awake_frames;
 
@@ -235,6 +247,10 @@ static void sim_reset(void)
       sim_in[IN_TMP + i] = 40;
       sim_out[HS_OUT_TARGET + i] = HS_TGT_HOLD;
    }
+   /* an arbitrary but non-uniform pattern, so a client that unpacks the
+      block in the wrong order cannot get lucky and still pass */
+   for (i = 0; i < IN_TAC_N; i++)
+      sim_in[IN_TAC + i] = (int16_t)(100 * (i / 4 + 1) + i % 4);
    sim_awake_frames = 0;
 }
 
@@ -939,6 +955,7 @@ static int bus_bringup(void)
    {
       in = sim_in;
       out = sim_out;
+      have_tac = 1;
       bus_up = 1;
       out[0] = 1;
       for (i = 0; i < 6; i++) out[HS_OUT_TARGET + i] = HS_TGT_HOLD;
@@ -955,6 +972,7 @@ static int bus_bringup(void)
    ecx_config_map_group(&ctx, IOmap, 0);
    if (ctx.slavelist[1].Ibytes < 36 * 2 || ctx.slavelist[1].Obytes < 19 * 2)
       return 4;
+   have_tac = ctx.slavelist[1].Ibytes >= (IN_TAC + IN_TAC_N) * 2;
 
    out = (int16_t *)ctx.slavelist[1].outputs;
    in  = (int16_t *)ctx.slavelist[1].inputs;
@@ -1084,9 +1102,20 @@ static void jarr(char *dst, size_t n, const int16_t *v)
    snprintf(dst, n, "[%d,%d,%d,%d,%d,%d]", v[0], v[1], v[2], v[3], v[4], v[5]);
 }
 
+static void jarrn(char *dst, size_t n, const int16_t *v, int count)
+{
+   size_t off = 0;
+   int i;
+   off += (size_t)snprintf(dst + off, n - off, "[");
+   for (i = 0; i < count && off < n; i++)
+      off += (size_t)snprintf(dst + off, n - off, "%s%d", i ? "," : "", v[i]);
+   if (off < n) snprintf(dst + off, n - off, "]");
+}
+
 static void reply_state(client_t *c)
 {
    char pos[64], ang[64], frc[64], cur[64], err[64], sta[64], tmp[64];
+   char tac[256];
    if (!bus_up)
    {
       creply(c, "{\"ok\":true,\"bus\":\"down\",\"note\":\"between execution "
@@ -1100,11 +1129,17 @@ static void reply_state(client_t *c)
    jarr(err, sizeof err, &in[IN_ERR]);
    jarr(sta, sizeof sta, &in[IN_STA]);
    jarr(tmp, sizeof tmp, &in[IN_TMP]);
+   /* null, not [], on a hand without the T1 option: a client telling the
+      two apart must not have to guess from an empty list */
+   if (have_tac) jarrn(tac, sizeof tac, &in[IN_TAC], IN_TAC_N);
+   else          strcpy(tac, "null");
    creply(c, "{\"ok\":true,\"bus\":\"up\",\"applying\":%s,\"simulate\":%s,"
              "\"pos\":%s,\"ang\":%s,"
-             "\"frc\":%s,\"cur\":%s,\"err\":%s,\"sta\":%s,\"tmp\":%s}",
+             "\"frc\":%s,\"cur\":%s,\"err\":%s,\"sta\":%s,\"tmp\":%s,"
+             "\"tac\":%s}",
           stuck ? "false" : "true",
-          cfg.simulate ? "true" : "false", pos, ang, frc, cur, err, sta, tmp);
+          cfg.simulate ? "true" : "false", pos, ang, frc, cur, err, sta, tmp,
+          tac);
 }
 
 static void handle_line(client_t *c, char *line)

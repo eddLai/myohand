@@ -38,7 +38,13 @@ also makes the profile ACTIVE, and this machine is shared.
 
     ../venv/bin/python3 thumb_calib_ui.py [device] [hold_seconds]
                         [--complexity=0|1] [--save=NAME] [--note=TEXT]
-                        [--replay]
+                        [--replay] [--direct]
+
+    --direct measures through the pipeline that drives the models itself
+    instead of through mp.solutions.hands. A window is a ruler, and it
+    should be cut with the front end that will later read it, so teleop
+    passes this through rather than leaving the two to disagree about what
+    an angle is.
 
     q or ESC aborts and still reports whatever was recorded. --replay
     re-runs the report over the last recording without a camera, so a
@@ -67,6 +73,7 @@ NOTE = opts.get("--note", "")
 # the live file and made it active. Pass the path explicitly instead.
 CALPATH = opts.get("--cal", hm.CAL_PATH)
 REPLAY = "--replay" in sys.argv
+DIRECT = "--direct" in sys.argv
 READY = 4.0
 
 if not REPLAY:   # a replay must not need a camera stack to be installed
@@ -293,8 +300,8 @@ if not REPLAY:
     print("%s手、手掌朝相機。指示顯示在視窗上，不必看這裡。" % (
         "右" if hm.HANDEDNESS == "Right" else "左"))
     print("⚠️ 邊框變綠 = 正在錄，手不要動，直到它跳下一個。")
-    print("提案的窗會從 model_complexity=%d (%s) 算，另一個只列出來對照。\n"
-          % (CPLX, NAME[CPLX]))
+    print("提案的窗會從 model_complexity=%d (%s%s) 算，另一個只列出來對照。\n"
+          % (CPLX, NAME[CPLX], "，自建管線" if DIRECT and CPLX == 0 else ""))
 
     draw = mp.solutions.drawing_utils
     styles = mp.solutions.drawing_styles
@@ -302,6 +309,11 @@ if not REPLAY:
                                         min_detection_confidence=0.6,
                                         min_tracking_confidence=0.5)
             for c in MODELS}
+    if DIRECT:
+        # the direct pipeline runs the lite models, so it stands in for
+        # complexity 0; full keeps its own net and its comparison column
+        import hand_pipeline
+        nets[0] = hand_pipeline.MediaPipeHands(threads=4)
     cap = cv2.VideoCapture(DEV)
     if not cap.isOpened():
         sys.exit("cannot open camera %d" % DEV)
@@ -493,6 +505,8 @@ else:
     proposed["HANDEDNESS"] = hm.HANDEDNESS
     name = hm.save_calibration(proposed, name=SAVE, path=CALPATH,
                                note=NOTE or "held poses, thumb_calib_ui.py, "
-                                            "model_complexity=%d" % CPLX)
+                                            "model_complexity=%d%s"
+                                            % (CPLX, ", direct pipeline"
+                                               if DIRECT and CPLX == 0 else ""))
     print("\n寫入 profile '%s' -> %s" % (name, CALPATH))
     print("⚠️ 它同時被設為 active，而這台機器是共用的。")

@@ -67,6 +67,7 @@ stop = False               # set by SIGINT/SIGTERM; the loop checks it
 sink = None                # where poses go; see hand_sink.open_sink
 settle_frames = 5          # 0 disables the gate entirely
 auto_sync = False
+direct = False             # --direct; also passed down to the calibration tool
 CAM_RETRY = 3.0            # seconds between reopen attempts while offline
 last_sent = None
 cal_note = ""              # what the last calibration attempt did
@@ -163,8 +164,12 @@ def run_calibration(device, open_camera, cap):
     # existed, and reports a refused calibration as a saved one.
     before = set(hm.list_profiles()[1])
     try:
+        # the window is about to be measured by whichever front end teleop
+        # is running, because a ruler cut with one and read with another is
+        # the mismatch nn/README.md already records at 11.5 degrees
         r = subprocess.run([sys.executable, CAL_TOOL, str(device),
-                            str(CAL_HOLD), "--save=" + name])
+                            str(CAL_HOLD), "--save=" + name]
+                           + (["--direct"] if direct else []))
         if r.returncode != 0:
             cal_note = f"calibration did not finish (exit {r.returncode})"
         elif name in before or hm.load_calibration(name) is None:
@@ -249,6 +254,11 @@ def build_parser():
                     help="run the palm and landmark models directly instead of "
                          "through mp.solutions.hands. Lets the thread count be "
                          "set, which is worth 2.4x on the KD240.")
+    ap.add_argument("--auto-sync", action="store_true",
+                    help="start with AUTO already on, keeping the window. "
+                         "For runs an operator watches rather than drives: "
+                         "--headless does this implicitly, and a window that "
+                         "needs a keypress first has silently sent nothing.")
     ap.add_argument("--threads", type=int, default=4,
                     help="inference threads for --direct. MediaPipe pins this "
                          "to 1 and offers no way to change it.")
@@ -259,7 +269,7 @@ def build_parser():
 
 
 def main():
-    global auto_sync, cal_request, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
+    global auto_sync, cal_request, direct, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
     args = build_parser().parse_args()
 
     SETTLE_TOL = args.settle_tol
@@ -301,6 +311,7 @@ def main():
         cap = open_camera(SETTINGS["device"])
         opened_device = SETTINGS["device"]
         cam_try = time.time()
+        direct = args.direct
         if args.direct:
             import hand_pipeline
             hands = hand_pipeline.MediaPipeHands(threads=args.threads)
@@ -316,6 +327,7 @@ def main():
             cv2.resizeWindow(win, args.width + 160, args.height + 90)
             cv2.moveWindow(win, 40, 60)
             cv2.setMouseCallback(win, on_mouse)
+            auto_sync = args.auto_sync
         else:
             # AUTO with no window to click: headless is for exercising the chain
             # end to end, and a run that never sends is not exercising it.

@@ -8,6 +8,13 @@ Run from a Vitis AI container with the model directory mounted. Nothing here
 touches a weight: the two rewrites are exact identities, and the accuracy
 cost is entirely the 8-bit arithmetic.
 
+## Before step 0
+
+Step 0 reads a recording of a hand, which is not in the repository because it
+is a few hundred megabytes of frames. Make one with `nn/ref_capture.py`; it
+writes `nn/refcap/frames.npz`, which is where step 0 looks by default. Point
+`REFCAP_NPZ` at another file to use a recording kept elsewhere.
+
 ## The order
 
 | | script | what it does |

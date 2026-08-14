@@ -18,14 +18,26 @@ import sys
 
 import numpy as np
 
-CAMERA = os.path.expanduser("~/myohand-pipeline/camera")
+# from this file rather than from a home directory: the detector and the
+# recording both live in this repository, and nn/dpu/palm is three levels down
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+CAMERA = os.path.join(REPO, "camera")
 sys.path.insert(0, CAMERA)
 sys.path.insert(0, os.path.join(CAMERA, "blaze"))
 import hand_pipeline as hp
 from blazedetector import BlazeDetector
 
-NPZ = os.path.expanduser("~/myohand/nn/refcap/frames.npz")
+# where ref_capture.py puts it; override for a recording kept elsewhere
+NPZ = os.environ.get("REFCAP_NPZ",
+                     os.path.join(REPO, "nn", "refcap", "frames.npz"))
 OUT = sys.argv[1] if len(sys.argv) > 1 else "palm_calib_192.npy"
+
+if not os.path.exists(NPZ):
+    raise SystemExit(
+        "no recording at %s\n"
+        "Record one first:  python3 nn/ref_capture.py\n"
+        "or point REFCAP_NPZ at an existing frames.npz." % NPZ)
 
 # the weights the pipeline itself resolves, so the calibration set cannot end
 # up describing a different copy of the model than the one being quantised

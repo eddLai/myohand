@@ -68,6 +68,7 @@ sink = None                # where poses go; see hand_sink.open_sink
 settle_frames = 5          # 0 disables the gate entirely
 auto_sync = False
 direct = False             # --direct; also passed down to the calibration tool
+use_dpu = False            # --dpu; likewise, so one front end cuts and reads
 CAM_RETRY = 3.0            # seconds between reopen attempts while offline
 last_sent = None
 cal_note = ""              # what the last calibration attempt did
@@ -250,6 +251,10 @@ def build_parser():
     ap.add_argument("--headless", action="store_true",
                     help="run the camera, mapping and sink with no window. "
                          "The whole vision chain over SSH, no display needed.")
+    ap.add_argument("--dpu", action="store_true",
+                    help="with --direct, run the palm detector on the "
+                         "DPU. KD240 only; the bitstream must already "
+                         "be in the PL")
     ap.add_argument("--direct", action="store_true",
                     help="run the palm and landmark models directly instead of "
                          "through mp.solutions.hands. Lets the thread count be "
@@ -269,7 +274,7 @@ def build_parser():
 
 
 def main():
-    global auto_sync, cal_request, direct, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
+    global auto_sync, cal_request, direct, use_dpu, last_sent, show_settings, sink, settle_frames, SETTLE_TOL
     args = build_parser().parse_args()
 
     SETTLE_TOL = args.settle_tol
@@ -300,6 +305,11 @@ def main():
 
     def open_camera(device):
         c = cv2.VideoCapture(device)
+        # before the size: the driver chooses a format first and offers sizes
+        # within it. Left alone it picks YUYV, and uncompressed frames at this
+        # size do not fit through USB 2.0 -- 7.8 fps against 30.0 for MJPG,
+        # which was the whole of the loop's frame rate, not a part of it
+        c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         c.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
         c.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
         return c
@@ -312,10 +322,15 @@ def main():
         opened_device = SETTINGS["device"]
         cam_try = time.time()
         direct = args.direct
+        use_dpu = args.dpu
         if args.direct:
             import hand_pipeline
             hands = hand_pipeline.MediaPipeHands(threads=args.threads)
-            print("vision: direct pipeline, %d threads" % args.threads)
+            if args.dpu:
+                import dpu_palm
+                dpu_palm.DpuPalm().attach(hands.pipe.det)
+            print("vision: direct pipeline, %d threads, palm on %s"
+                  % (args.threads, "DPU" if args.dpu else "CPU"))
         else:
             hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
                                              min_detection_confidence=0.6,

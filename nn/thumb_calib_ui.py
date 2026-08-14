@@ -74,6 +74,9 @@ NOTE = opts.get("--note", "")
 CALPATH = opts.get("--cal", hm.CAL_PATH)
 REPLAY = "--replay" in sys.argv
 DIRECT = "--direct" in sys.argv
+# --dpu: the same direct pipeline, with the palm detector on the DPU.
+# Only meaningful with --direct, and only on a board that has one.
+DPU = "--dpu" in sys.argv
 READY = 4.0
 
 if not REPLAY:   # a replay must not need a camera stack to be installed
@@ -314,6 +317,10 @@ if not REPLAY:
         # complexity 0; full keeps its own net and its comparison column
         import hand_pipeline
         nets[0] = hand_pipeline.MediaPipeHands(threads=4)
+        if DPU:
+            import dpu_palm
+            dpu_palm.DpuPalm().attach(nets[0].pipe.det)
+            print("量測用的 palm 跑在 DPU 上\n")
     cap = cv2.VideoCapture(DEV)
     if not cap.isOpened():
         sys.exit("cannot open camera %d" % DEV)

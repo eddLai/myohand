@@ -275,3 +275,23 @@ repo 只留操作面。以下都在 ExoPulse_docs vault 的
 | `Persistent_OP_Probe` | 2026-08-05 前身探測 |
 
 `experiments/results_2026-08-06/` 的原始輸出留在 repo 裡跟產生它的程式放一起。
+
+## Building handd on a board that built the old layout
+
+`handd` links `soem_build/build/libsoem.a`, and a board that was brought up
+against the earlier `inspire_hand/` tree has that library there instead. The
+build stops at `No rule to make target 'soem_build/build/libsoem.a'`.
+
+Point this tree at the one already built rather than building SOEM twice --
+it is the same pinned commit, and a second copy is a second thing to keep in
+step:
+
+    cd hand_fw/soem_build
+    ln -s ../../inspire_hand/soem_build/SOEM  SOEM
+    ln -s ../../inspire_hand/soem_build/build build
+    cd .. && make handd
+    sudo setcap cap_net_raw,cap_net_admin+eip handd
+
+The capability is not optional and does not survive `chown`: changing a
+file's owner clears its file capabilities, and `handd` then reports
+`ecx_init failed` as though the interface were wrong.

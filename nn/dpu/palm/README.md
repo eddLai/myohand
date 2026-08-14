@@ -12,6 +12,7 @@ cost is entirely the 8-bit arithmetic.
 
 | | script | what it does |
 |---|---|---|
+| 0 | `make_palm_calib.py` | build the 192x192 calibration set from the reference recording, letterboxed the way the detector letterboxes. Whole frames, not crops: the detector is never shown a crop |
 | 1 | `cut_palm_tail.py` | extract the graph at the four head convs, so the dynamic reshape at the tail stops blocking the quantiser |
 | 2 | `expand_prelu.py` | `PReLU(x) = ReLU(x) − a·ReLU(−x)`, written as ReLU + two 1×1 depthwise convs + Add. **This is what unblocks the partition** |
 | 3 | `expand_pad.py` | zero-padding C channels as a 1×1 Conv with identity rows and zero rows; the DPU refuses CONSTANT-mode Pad |
@@ -50,3 +51,20 @@ That bitstream is not what the board runs. The DPU-PYNQ overlay already on
 the KD240 is a B1600 -- larger, and already working -- so the compiled model
 targets its fingerprint instead. The tcl is here so the PL is ours to
 rebuild when the design needs to hold more than a DPU.
+
+## board/
+
+What was run on the KD240 itself, kept because the numbers in this README
+came out of it and a claim without its measurement is just a claim.
+
+| script | what it answers |
+|---|---|
+| `graph_map.py` | what the compiler left on the CPU between the DPU passes -- two ReLUs and some scale conversions, which is why driving the segments by hand was reasonable |
+| `full_run.py` | the whole detector on the board, checked frame by frame against the host's simulation of the same model |
+| `board_vision.py` | camera to joint angles end to end, with a stage breakdown. This is where the 49 ms `resize` turned out to be a non-contiguous array, not the resize |
+| `ab_replay.py` | one recording replayed through both front ends. **DPU 21.6 fps against tflite 11.7** on identical frames |
+| `preview_server.py` | serves the annotated feed as a web page, because the board has no display and a tracker cannot be judged from counters |
+
+They were run from `~/pipe_bench` on the board with this repo's `camera/`
+importable, and they carry those paths. They are recorded as they ran rather
+than tidied, because a rewritten measurement is one nobody has run.

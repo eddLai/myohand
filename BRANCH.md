@@ -1,113 +1,92 @@
-# feat/direct-pipeline — 自己驅動 palm 與 landmark 模型
+# kd240-dpu-20260814 — 把 palm_detection 放進 KD240 的 PL
 
-`mp.solutions.hands` 是一顆黑盒：丟一張圖進去、吐 21 個點出來，中間的縮圖、
-偵測、解 anchor、NMS、旋轉裁切、追蹤全部在編譯好的 C++ 裡。這個分支把那一段
-自己接起來，兩個 `.tflite` 檔一個位元都不改。
+`feat/direct-pipeline` 把兩顆模型從黑盒裡拆出來自己驅動，為的是能設執行緒數、
+能把模型換到別的硬體上跑。**這個分支做的就是那個「別的硬體」**：palm 偵測器的
+卷積跑在 DPU 上，解碼、landmark、追蹤留在 A53。
 
-**動機是黑盒沒有入口的兩件事**：
+## 為什麼是 palm，不是 landmark
 
-1. **設執行緒數** —— MediaPipe 在四核零件上把 XNNPACK 釘死在 1 條，
-   Python API 不給改。KD240 上這是 **7.8 FPS 對 19.0 FPS** 的差別。
-2. **把 landmark 換成別的硬體跑** —— 模型是它自己載、自己餵的，插不進去。
+前一輪（`nn/dpu/`，2026-08-12）試的是 landmark，結論是**不能用**：四顆輸出頭
+共用一個 672 維特徵向量，量化後帶 2.9% 雜訊，影像座標吸收成 1.6 px 沒差，
+但 world 骨架吸收成 2.6 公分——而指骨才 2–3 公分，`hand_mapping` 又只吃 world。
 
-## 成績 Measured
+palm 反過來：它只要輸出一個框，量化的代價落在**信心分數**而不是位置。
 
-在 KD240（`ubuntu@120.126.83.228`，A53 四核）上，同一批錄影影格：
+## 擋路的是圖被切碎，不是精度
 
-| 執行緒 | 整體平均 | 追蹤中的一幀 | palm | landmark |
-|---|---|---|---|---|
-| 1 | 7.4 FPS | 116.6 ms | 244.7 ms | 104.8 ms |
-| 2 | 12.8 FPS | 67.9 ms | 134.7 ms | 58.4 ms |
-| **4** | **19.0 FPS** | **46.0 ms** | 84.4 ms | 36.7 ms |
-| MediaPipe 黑盒 | 7.8 FPS | 127.5 ms | — | — |
-
-膠水（我們自己寫的部分）在 4 執行緒下佔 18%，其中 323 ms 是 `cv2.warpAffine`
-的旋轉裁切（C 寫的）。真正屬於 numpy 的只有約 2.8% —— **A53 沒有 BLAS 這件事
-沒有咬到我們。**
-
-> ⚠️ vault 的 `A53_Inference_Baseline` 寫「4 執行緒後追蹤中 35.8 ms（27.9 FPS）」，
-> 那是**只算模型**。加上膠水的真實數字是 46.0 ms（21.7 FPS）。
-> 該文件的 36.2 ms landmark 數字則與本次量到的 36.7 ms 對到 1.4%。
-
-## 正確性 Verified against MediaPipe, frame by frame
-
-150 幀錄影（`nn/ref_capture.py` 錄的，含 MediaPipe 對同一批影像的答案）：
-
-| | |
-|---|---|
-| 偵測 | MediaPipe 找到的 112 幀我全部也找到，只有 1 幀各自多／少 |
-| 點位 | 中位 **1.3 px**（1280 寬） |
-| 關節角度 | 中位 **1.2–2.2°** |
-| **送給馬達的目標值** | 中位 **6–14 counts**（各軸行程 500–800） |
-| `thumb_trust` 判定 | 111 幀只有 3 幀不同 |
-
-**沒有追蹤的話點位差 14.6 px**，補上之後 1.3 px —— 追蹤那一段是整件事的關鍵，
-而參考實作（`camera/blaze/`，來自 blaze_app_python）沒有提供，是這裡加的。
-
-追蹤用的裁切規則跟偵測那條**不一樣**：旋轉基準取 wrist 到指根連線（不是 wrist
-到中指根）、放大 2.0 倍（不是 2.6）、不做向下位移。照抄偵測那條會錯。
-
-### 誤差集中在兩處，不是散開的
-
-| 距離最近一次重偵測 | 幀數 | 最差角度中位 |
+| | palm_detection | hand_landmark |
 |---|---|---|
-| 就是那一幀 | 4 | 23.4° |
-| 之後 1–3 幀 | 10 | 14.7° |
-| 之後 4–10 幀 | 21 | **3.0°** |
-| 之後 11 幀以上 | 76 | **3.1°** |
+| PReLU | **26** | 0 |
+| Conv | 53 | 47 |
 
-兩邊各自偵測出的 ROI 差一點，約 4 幀收斂到一起。另有三幀點位只差 2.6–6.6 px
-但對掌差 100° —— 那是拇指被遮住時模型本身不穩（見 `feat/thumb-decouple`），
-不是管線的問題。
-
-## 用法 Usage
-
-```bash
-python3 teleop/teleop_app.py --direct            # 4 執行緒
-python3 teleop/teleop_app.py --direct --threads=2
-python3 teleop/teleop_app.py                     # 原本的黑盒，預設
-```
-
-**預設行為完全沒變。** 這是唯一驅動過機器手的視覺路徑，中位吻合不等於逐幀吻合，
-所以放在旗標後面。
-
-## handedness 是量出來的，不是猜的
-
-模型只給一個純量，teleop 要的是 `"Left"/"Right"` 加分數。對照 MediaPipe 在
-111 幀上的標籤：
+`DPUCZDX8G` 沒有 `prelu` 指令，每遇到一個就切一刀，編譯出來 **33 個 DPU 子圖**。
+兩個恆等改寫解掉：
 
 ```
-純量 ≥ 0.5  →  "Left"，  score = 純量        （|差| 中位 0.076）
-純量 < 0.5  →  "Right"， score = 1 − 純量     （|差| 中位 0.003）
+PReLU(x) = ReLU(x) − a·ReLU(−x)   → ReLU + 兩個 1×1 depthwise conv + Add
+零填充 C 個通道                    → 1×1 Conv（單位矩陣列 + 零列）
 ```
 
-`thumb_trust` 會因為標籤錯就整幀拒絕，弄反的話拇指不是狂凍結就是完全不設防。
+**33 → 6 → 3 段，權重一個沒動、沒有重訓。**
 
-## 檔案 What is here
+先前兩次嘗試（`fix_prelu_shape.py`、`swap_prelu.py`）把表示法清乾淨了
+（637→377 ops、52 個 transpose 歸零）卻**沒有改變切分**——那是「問題在算子種類、
+不在圖的雜訊」的證據，所以留著。
 
-| | |
-|---|---|
-| `camera/hand_pipeline.py` | 管線 + `MediaPipeHands` 相容包裝 |
-| `camera/blaze/` | 參考實作，Apache 2.0，含 LICENSE。常數來自 MediaPipe v0.10.9 的 pbtxt |
-| `teleop/teleop_app.py` | +15 −3：`--direct` / `--threads` |
-| `nn/ref_capture.py` | 錄「影像 + MediaPipe 的答案」 |
-| `nn/refcap_audit.py` | 檢查錄影有沒有涵蓋會出問題的情況 |
-| `nn/compare_tracked.py` | 逐幀比對角度 |
-| `nn/compare_targets.py` | 比對送給馬達的六個目標值 |
-| `nn/tail_diag.py` | 誤差集中在哪 |
-| `nn/bench_pipeline.py` | 分段計時 + 執行緒掃描 |
-| `nn/make_calib.py` | 產量化用的校正裁切 |
-| `nn/handedness_map.py` | 量出 handedness 的對應關係 |
-| **`nn/dpu/`** | **把 landmark 送上 DPU 的完整嘗試，見該資料夾的 README** |
+## 量化的代價
 
-## 還沒驗的 Not verified
+150 張參考錄影，浮點偵測到 117 張，另 33 張它自己判定沒手（現成的反例）。
 
-- **實機手感**。數字吻合不代表體感一樣，特別是重偵測後那 4 幀。
-- **`.112` 上感覺不到差別** —— 那台有 RTX 4080。2.4 倍是 KD240 上的事。
-- **相機解析度不同時的行為**（量測都在 1280×720 與 320×180）。
+```
+int8 分數 / float 分數 = 中位數 0.598      ← 整體壓縮，不是打亂
+```
 
-## 合併前要處理的
+| 門檻 | 偵測到 /117 | 誤判 /33 |
+|---|---|---|
+| 0.50（預設） | 73 | 0 |
+| **0.35–0.40** | **85–86** | **0** |
+| 0.30 | 99 | 0 |
+| 0.20 | 107 | 9 |
 
-`feat/filter-stage` 也在改 `teleop/teleop_app.py`（+326 −29）。試合併有
-**一個衝突點**，在 argparse ——兩邊都在 `--max-frames` 附近加參數。
-`hands = mp.solutions.hands.Hands(...)` 那行 filter-stage 沒動。
+**浮點模型在 0.30 誤判 22 張，int8 誤判 0 張**——量化把背景壓得比手更兇，
+所以調門檻不是放寬標準。框的中心與浮點差 **0.01 px**（最差 0.28）。
+
+誠實的負面結果：把校正集從 150 張擴增到 450 張重新量化，**每個門檻都更差**
+（0.30 時 81 對 99）。`augment_calib.py` 留著記這件事。
+
+## 板上實測
+
+板子已有他人放的 DPU-PYNQ overlay，`ARCH_PP 8 × ICP 10 × OCP 10` ＝ **B1600**，
+指紋 `0x101000016010404`。以該指紋重編後：
+
+```
+裝置子圖 10（3 DPU、6 CPU、1 輸入）
+主幹單段          50.1 FPS
+整條偵測器        30.4 FPS
+palm 在 A53       11.7 FPS      ← 同一段錄影，只換 palm 跑在哪
+palm 在 DPU       21.6 FPS
+```
+
+⚠️ **指紋檢查發生在執行時，不是建立 runner 時。** `create_runner()` 會成功，
+`execute_async()` 才拋 `fingerprint check failure`。
+
+`nn/dpu/palm/vivado/` 另含自建 B1024 的完整流程（PS + DPU + AXI + 時脈 + 中斷），
+Vivado 2025.1 / xck24：LUT 56.6%、DSP 63.9%、WNS +0.500 ns，合成到 bitstream
+14 分鐘。**板子沒有跑它**——現成的 B1600 更大且可用。留著是為了 PL 之後要裝
+不只一顆 DPU 時，重建的路是我們自己的。
+
+## 這個分支取代了什麼
+
+`feat/direct-pipeline` 的最後一筆（`4c98807`）加的那七個腳本，**這裡全部有，
+而且是實際跑出上面數字的版本**。`nn/make_palm_calib.py` 搬到了
+`nn/dpu/palm/make_palm_calib.py`。**這個分支併進 main 之後，
+`feat/direct-pipeline` 就可以刪。**
+
+## 還沒解的
+
+- **landmark 仍然上不了 DPU。** QAT／蒸餾是唯一沒被排除的路，且是獨立的訓練專案。
+- 自建的 B1024 bitstream 沒燒進板子過。
+- 校正工具不吃 `--dpu`：XRT 一次只把 `DPU_0` 給一個行程，teleop 佔著時第二個會空等。
+
+板端整合踩到的坑（相機格式、權限、字型）記在 `nn/dpu/palm/board/` 與 vault 的
+`Palm_DPU_Board_Integration`。

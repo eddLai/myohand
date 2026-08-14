@@ -1,3 +1,12 @@
+> **這個分支已被 `kd240-dpu-20260814` 取代（2026-08-14）。**
+> 最後一筆 `4c98807` 加的七個 DPU 腳本，在那個分支上全都有、而且是實際跑出
+> 板上數字的版本；`nn/make_palm_calib.py` 搬到了 `nn/dpu/palm/make_palm_calib.py`。
+> 那邊多了 vivado 完整流程、`score_probe` / `fp_probe` 門檻量測與板端腳本，
+> 共多 2721 行。
+>
+> 本分支底下的內容仍然正確——它記的是**自建管線本身**（7.8 → 19.0 FPS），
+> 那部分已併入 `main`。**`kd240-dpu-20260814` 併進 main 之後，本分支可以刪。**
+
 # feat/direct-pipeline — 自己驅動 palm 與 landmark 模型
 
 `mp.solutions.hands` 是一顆黑盒：丟一張圖進去、吐 21 個點出來，中間的縮圖、

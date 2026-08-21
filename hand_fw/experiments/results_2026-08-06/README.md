@@ -3,7 +3,7 @@
 Raw output from the run that closed the "why does this hand only move when
 you disconnect" question. KD240 `.228`, hand direct into `eth1`, no switch,
 single slave, middle finger (axis 2). Written up in the ExoPulse_docs vault
-under `Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/
+under `L5_HMInteraction/Inspire_RH56F1/01_Hand_Control/EtherCAT/
 Execution_Trigger_Settled.md`; this directory is the evidence behind it.
 
 Read them in this order — each one closes something.

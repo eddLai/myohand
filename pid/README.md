@@ -5,7 +5,7 @@
 `test_pid.py` 是離線測試。
 
 **原理、防護規則表、Ki 依據與驗收方法在 vault**：
-`Project_Management/Inspire_RH56F1/01_Hand_Control/PID_Guard/PID_Outer_Loop_Principle.md`
+`L5_HMInteraction/Inspire_RH56F1/01_Hand_Control/PID_Guard/PID_Outer_Loop_Principle.md`
 
 ## 現況：不要接上去
 

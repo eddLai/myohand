@@ -112,7 +112,7 @@ BLED112 dongle 會被 `Myo.detect_tty()` 自動找到（比對 `PID=2458:0*1`）
 ## hand_fw/
 
 怎麼跑見 [`hand_fw/README.md`](hand_fw/README.md)。技術細節都在 ExoPulse_docs vault
-的 `Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/`：`Hand_FW_Reference`
+的 `L5_HMInteraction/Inspire_RH56F1/01_Hand_Control/EtherCAT/`：`Hand_FW_Reference`
 （控制層、觸發策略、延遲、尺度推導、安全層、幾何表、teleop UI、已知限制）、
 `Execution_Trigger_Settled`（執行觸發結論）、`SOEM_Port_Plan`（移植與建置陷阱）；
 完整 bring-up 流水帳在 `Inspire_RH56F1_Hand_Bringup_Ops_Log`。
@@ -123,7 +123,7 @@ BLED112 dongle 會被 `Myo.detect_tty()` 自動找到（比對 `PID=2458:0*1`）
 的待辦寫在各自的 README（`filter/`、`nn/`、`pid/`）。
 
 推導、量測依據與整體順序在 ExoPulse_docs vault 的
-`Project_Management/Inspire_RH56F1/`：`Inspire_RH56F1_KD240_Deployment_Plan`
+`L5_HMInteraction/Inspire_RH56F1/`：`Inspire_RH56F1_KD240_Deployment_Plan`
 （§九 是這三件事的六步順序）、`03_Hand_Pose_Model/MediaPipe_Replacement_Interface_Fork`、
 `Inspire_RH56F1_Repo_Slimming_Plan`。這裡只留 repo 這一側「動哪些檔案」。
 

@@ -37,7 +37,7 @@
  * is the axis moving once the interruptions stop.
  *
  * Plan, result and rerun instructions live in the ExoPulse_docs vault:
- * Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/
+ * L5_HMInteraction/Inspire_RH56F1/01_Hand_Control/EtherCAT/
  * Persistent_OP_Probe.md, superseded by Execution_Trigger_Settled.md in
  * the same directory. Raw trace of the 2026-08-05 run is next to this
  * file as probe_2026-08-05_eno1_axis2.csv.

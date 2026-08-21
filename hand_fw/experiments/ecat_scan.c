@@ -25,7 +25,7 @@
  *        iface, 3 = another master holds the bus
  *
  * hasdc is printed because it decides the Sync0 question - see
- * ExoPulse_docs Project_Management/Inspire_RH56F1/01_Hand_Control/
+ * ExoPulse_docs L5_HMInteraction/Inspire_RH56F1/01_Hand_Control/
  * EtherCAT/Persistent_OP_Probe.md.
  */
 #include "soem/soem.h"

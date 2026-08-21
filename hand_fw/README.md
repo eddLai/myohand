@@ -2,8 +2,8 @@
 
 Inspire RH56F1 靈巧手走 EtherCAT 的控制堆疊。這份 README 只講**怎麼跑**；
 推導、量測數字與設計理由在 ExoPulse_docs vault 的
-`Inspire_RH56F1/01_Hand_Control/EtherCAT/Hand_FW_Reference`，協定逆向的
-結論檔是同目錄的 `Execution_Trigger_Settled`。
+`L5_HMInteraction/Inspire_RH56F1/01_Hand_Control/EtherCAT/Hand_FW_Reference`，
+協定逆向的結論檔是同目錄的 `Execution_Trigger_Settled`。
 
 已在三台主機上驅動過，網卡名每台都不同，所以樹裡沒有一處寫死網卡：
 **`$ECAT_IFACE` 選網卡，預設 `eth0`**，`experiments/ecat_scan` 告訴你哪一張會回應。
@@ -300,7 +300,7 @@ T1 版的手把觸覺放在 TxPDO 軸狀態後面：**34 個 short = 8 個電容
 ## 細節在哪裡
 
 repo 只留操作面。以下都在 ExoPulse_docs vault 的
-`Project_Management/Inspire_RH56F1/01_Hand_Control/EtherCAT/`：
+`L5_HMInteraction/Inspire_RH56F1/01_Hand_Control/EtherCAT/`：
 
 | 文件 | 內容 |
 |---|---|

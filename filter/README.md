@@ -4,9 +4,10 @@
 六軸連續目標出。負責一件事：**手沒在動的時候，不要送任何動作給馬達**；
 手在動的時候，不要因此變鈍。
 
-**量測、參數依據與設計理由在 vault**：`Project_Management/Inspire_RH56F1/
+**量測、參數依據與設計理由在 vault**：`L5_HMInteraction/Inspire_RH56F1/
 01_Hand_Control/Command_Filter/`（`Command_Filter_Reference.md` 是 hub，另有
-`Jitter_Instrument_Reference.md`、`Run_Log_Reference.md`）。本檔只留「怎麼跑」。
+`Jitter_Instrument_Reference.md`、`Run_Log_Reference.md`、
+`Frequency_Response_Reference.md`）。本檔只留「怎麼跑」。
 
 ## 怎麼跑
 
